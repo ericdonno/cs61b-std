@@ -37,7 +37,7 @@ public class NBody {
             }
 //            System.out.println("sun by" + xForces[3]+ " " + yForces[3] );
             for(int i=0; i<N; i++){
-                System.out.println("Planet"+ i+  "Position: (" + planets[i].xxPos + ", " + planets[i].yyPos + ")");
+                // System.out.println("Planet"+ i+  "Position: (" + planets[i].xxPos + ", " + planets[i].yyPos + ")");
                 planets[i].update( dt, xForces[i], yForces[i] );
             }
             drawBackground(backgroundImg);
@@ -45,7 +45,7 @@ public class NBody {
             StdDraw.show();
             StdDraw.pause(10);
             time += dt;
-            System.out.println(time+"/"+T);
+            // System.out.println(time+"/"+T);
         }
 
         //Printing the Universe
@@ -87,7 +87,7 @@ public class NBody {
         for( Planet p : planets ){
             p.draw();
         }
-        System.out.println("all drawn");
+        // System.out.println("all drawn");
     }
 
 }
