@@ -82,6 +82,9 @@ public class IntList {
 
     public static IntList dcatenate(IntList A, IntList B) {
         //TODO:  fill in method
+        if (A == null || B == null) {
+            throw new IllegalArgumentException("Input lists cannot be null");
+        }
         IntList p = A;
         while (p.rest != null){
             p = p.rest;
@@ -96,6 +99,9 @@ public class IntList {
      */
     public static IntList catenate(IntList A, IntList B) {
         //TODO:  fill in method
+        if (A == null || B == null) {
+            throw new IllegalArgumentException("Input lists cannot be null");
+        }
         IntList L = new IntList(A.first, null);
         IntList resultL = L;
         while (A.rest != null){
