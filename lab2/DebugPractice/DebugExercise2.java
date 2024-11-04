@@ -13,7 +13,8 @@ public class DebugExercise2 {
         int z = ~(b - a) >> 31;
 
         int max = b & w | a & z;
-        return max;
+        int real_max = Math.max(a,b);         //fucking joke
+        return real_max;
     }
 
 
@@ -60,7 +61,7 @@ public class DebugExercise2 {
         int i = 0;
         int sum = 0;
         while (i < x.length) {
-            sum = sum + add(sum, x[i]);
+            sum = sum + x[i];
             i = i + 1;
         }
         return sum;
