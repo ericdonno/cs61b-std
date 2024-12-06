@@ -1,6 +1,6 @@
 /**
  * 不使用哨兵节点
- * ：实现起来总是需要考虑是否为空节点，很麻烦。
+ * ：实现起来有很多特殊情况需要考虑，很麻烦。
  * */
 
 public class LinkedListDeque<T> {
@@ -64,7 +64,13 @@ public class LinkedListDeque<T> {
             return null;
         }
         T out = this.first.data;
-        this.first = this.first.next;
+        if (this.size == 1){
+            this.last = null;
+            this.first = null;
+        } else {
+            this.first = this.first.next;
+            this.first.prev = null;
+        }
         this.size--;
         return out;
     }
@@ -74,7 +80,13 @@ public class LinkedListDeque<T> {
             return null;
         }
         T out = this.last.data;
-        this.last = this.last.prev;
+        if (this.size == 1){     //只剩一个节点的特殊情况
+            this.last = null;
+            this.first = null;
+        } else {
+            this.last = this.last.prev;
+            this.last.next = null;
+        }
         this.size--;
         return out;
     }

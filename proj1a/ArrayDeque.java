@@ -60,8 +60,8 @@ public class ArrayDeque<T> {
         if (isEmpty()) {
             return null;
         } else {
-            T out = items[nextFirst];
             nextFirst = (nextFirst + 1) % items.length;
+            T out = items[nextFirst];
             size--;
             return out;
         }
@@ -71,8 +71,8 @@ public class ArrayDeque<T> {
         if (isEmpty()) {
             return null;
         } else {
-            T out = items[nextLast];
             nextLast = (nextLast - 1 + items.length) % items.length;
+            T out = items[nextLast];
             size--;
             return out;
         }
@@ -86,7 +86,7 @@ public class ArrayDeque<T> {
 
     public void printDeque() {
         for (int i=0; i<size; i++) {
-            System.out.print(items[nextFirst + 1 + i].toString()+' ');
+            System.out.print(items[(nextFirst + 1 + i) % items.length].toString()+' ');
         }
         System.out.println();
     }
