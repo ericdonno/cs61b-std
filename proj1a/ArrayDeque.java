@@ -12,7 +12,7 @@ public class ArrayDeque<T> {
         this.items = (T[]) new Object[STARTING_SIZE];
         this.size = 0;
         this.nextFirst = 0;
-        this.nextLast = 0;
+        this.nextLast = 1;
     }
 
 
@@ -91,4 +91,5 @@ public class ArrayDeque<T> {
         System.out.println();
     }
 }
+
 
