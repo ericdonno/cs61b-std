@@ -4,7 +4,7 @@ public class ArrayDeque<T> {
     private int nextFirst;
     private int nextLast;
 
-    private static final int REFACTOR = 10;
+    private static final int REFACTOR = 2;
     private static final int STARTING_SIZE = 8;
 
     /** 构造空队列 */
@@ -67,6 +67,7 @@ public class ArrayDeque<T> {
         } else {
             nextFirst = (nextFirst + 1) % items.length;
             T out = items[nextFirst];
+            items[nextFirst] = null;
             size--;
             return out;
         }
@@ -78,6 +79,7 @@ public class ArrayDeque<T> {
         } else {
             nextLast = (nextLast - 1 + items.length) % items.length;
             T out = items[nextLast];
+            items[nextLast] = null;
             size--;
             return out;
         }
