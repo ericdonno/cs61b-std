@@ -20,7 +20,12 @@ public class ArrayDeque<T> {
 
     private void resize(int capacity) {
         T[] r = (T[]) new Object[capacity];
-        System.arraycopy(items,0, r ,0, size);     //相当于在原数组后面接了一串，不需要修改头尾指针
+//        System.arraycopy(items,0, r ,0, size);     //相当于在原数组后面接了一串，不需要修改头尾指针   //有bug
+        for (int i=0; i<size; i++) {
+            r[i+1] = items[(nextFirst + 1 + i) % items.length];
+        }
+        nextFirst = 0;
+        nextLast = size + 1;
         items = r;
     }
 
