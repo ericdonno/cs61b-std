@@ -38,7 +38,7 @@ public class ArrayDeque<T> {
         return size == 0;
     }
 
-    public boolean isFull() {
+    private boolean isFull() {
 //        return (this.nextLast+1) % items.length == this.nextFirst;      //双端队列不能用头尾指针的相对位置判断空满!
         return size == items.length;
     }

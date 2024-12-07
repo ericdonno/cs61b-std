@@ -1,5 +1,4 @@
-/**
- * 不使用哨兵节点
+/** 不使用哨兵节点
  * ：实现起来有很多特殊情况需要考虑，很麻烦。
  * */
 
@@ -9,20 +8,20 @@ public class LinkedListDeque<T> {
         Node<T> prev;
         Node<T> next;
 
-        Node(T data){
+        Node(T data) {
             this.data = data;
             this.prev = null;
             this.next = null;
         }
-        Node(T data, Node<T> prev, Node<T> next ){
+        Node(T data, Node<T> prev, Node<T> next ) {
             this.data = data;
             this.prev = prev;
             this.next = next;
         }
     }
 
-    public Node<T> first;
-    public Node<T> last;
+    private Node<T> first;
+    private Node<T> last;
     private int size;
 
     public LinkedListDeque(){
