@@ -40,7 +40,7 @@ public class TestArrayDequeGold {
                         Integer correctResult = correctDeque.removeFirst();
                         operationSequence.append("removeFirst(").append(")\n");
                         // 如果结果不同，输出操作序列并触发断言
-                        assertEquals("Error at operation sequence:\n" + operationSequence.toString(),
+                        assertEquals( operationSequence.toString(),
                                 correctResult, studentResult);
                     }
                     break;
@@ -50,7 +50,7 @@ public class TestArrayDequeGold {
                         Integer correctResult = correctDeque.removeLast();
                         operationSequence.append("removeLast(").append(")\n");
                         // 如果结果不同，输出操作序列并触发断言
-                        assertEquals("Error at operation sequence:\n" + operationSequence.toString(),
+                        assertEquals( operationSequence.toString(),
                                 correctResult, studentResult);
                     }
                     break;
