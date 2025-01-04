@@ -38,7 +38,7 @@ public class TestArrayDequeGold {
                     if (!studentDeque.isEmpty() && !correctDeque.isEmpty()) {
                         Integer studentResult = studentDeque.removeFirst();
                         Integer correctResult = correctDeque.removeFirst();
-                        operationSequence.append("removeFirst(").append(")\n");
+                        operationSequence.append("removeFirst()\n");
                         // 如果结果不同，输出操作序列并触发断言
                         assertEquals("Error at operation sequence:\n" + operationSequence.toString(),
                                 correctResult, studentResult);
@@ -48,7 +48,7 @@ public class TestArrayDequeGold {
                     if (!studentDeque.isEmpty() && !correctDeque.isEmpty()) {
                         Integer studentResult = studentDeque.removeLast();
                         Integer correctResult = correctDeque.removeLast();
-                        operationSequence.append("removeLast(").append(")\n");
+                        operationSequence.append("removeLast()\n");
                         // 如果结果不同，输出操作序列并触发断言
                         assertEquals("Error at operation sequence:\n" + operationSequence.toString(),
                                 correctResult, studentResult);
@@ -60,3 +60,4 @@ public class TestArrayDequeGold {
         }
     }
 }
+
