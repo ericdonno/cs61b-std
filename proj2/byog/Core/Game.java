@@ -20,6 +20,7 @@ public class Game {
     private Player player;
     private List<Entity> entities;
     private Map<Character, Runnable> keyBindings;
+    private String seed;
 
     // 游戏状态枚举
     private enum GameState {
@@ -46,12 +47,6 @@ public class Game {
      */
     public TETile[][] playWithInputString(String input) {
         // 初始化世界和实体
-        world = new TETile[WIDTH][HEIGHT];
-        for (int x = 0; x < WIDTH; x += 1) {
-            for (int y = 0; y < HEIGHT; y += 1) {
-                world[x][y] = Tileset.NOTHING;
-            }
-        }
         entities = new ArrayList<>();
         player = null;
 
@@ -72,8 +67,11 @@ public class Game {
                     if (c == 'n') {
                         currentState = GameState.SEED_INPUT; // 切换状态：准备接收数字
                     } else if (c == 'l') {
-                        // TODO: 加载游戏存档逻辑
-                        currentState = GameState.PLAYING;    // 加载完毕，进入游玩状态
+                        // 加载游戏存档逻辑
+                        if (loadGameState()) {
+                            Logger.section("Game started (loaded save).");
+                            currentState = GameState.PLAYING;    // 加载完毕，进入游玩状态
+                        }
                     } else if (c == 'q') {
                         // 退出游戏 (在此方法中可能直接 return 当前空帧)
                         return renderFrame();
@@ -85,12 +83,11 @@ public class Game {
                         seedStr.append(c); // 收集数字，状态不改变
                     } else if (c == 's') {
                         // 种子输入完毕，开始生成世界
-                        String seed = seedStr.toString();
-                        world = WorldGenerator.RandomSquareRoomWrd(world, seed);
-                        player = new Player();
-                        Player.initPlayer(player, world, seed);
+                        world = generateWorld(seedStr.toString());
+                        player = spawnPlayer(this.seed);
                         entities.add(player);
 
+                        Logger.section("Game started (new game).");
                         currentState = GameState.PLAYING; // 世界生成完毕，进入游玩状态
                     } else {
                         // 处理异常输入，或者忽略
@@ -108,7 +105,8 @@ public class Game {
 
                 case QUIT_PENDING:
                     if (c == 'q') {
-                        // TODO: 保存游戏存档逻辑
+                        // 保存游戏存档逻辑
+                        saveGameState();
                         // 存档后退出 (对于 String 方法通常是停止处理并返回)
                         return renderFrame();
                     } else {
@@ -139,7 +137,7 @@ public class Game {
         if (action != null) {
             action.run();
         } else {
-            Logger.error("Unbind Key \"%c\"", c);
+            Logger.info("Unbind Key \"%c\"", c);
         }
     }
 
@@ -152,7 +150,6 @@ public class Game {
         keyBindings.put('a', () -> movePlayer(player, Direction.LEFT));
         keyBindings.put('d', () -> movePlayer(player, Direction.RIGHT));
     }
-
 
     private void movePlayer(Player player, Direction direction) {
         player.move(direction, this::isPlayerColliding);
@@ -188,5 +185,83 @@ public class Game {
             }
         }
         return frame;
+    }
+
+    /**
+     * 用 seed 生成世界并记录到 seed 字段。
+     * @return 生成后的 TETile[][]
+     */
+    private TETile[][] generateWorld(String seed) {
+        this.seed = seed;
+        return WorldGenerator.RandomSquareRoomWrd(createEmptyWorld(), seed);
+    }
+
+    private TETile[][] createEmptyWorld() {
+        TETile[][] w = new TETile[WIDTH][HEIGHT];
+        for (int x = 0; x < WIDTH; x += 1) {
+            for (int y = 0; y < HEIGHT; y += 1) {
+                w[x][y] = Tileset.NOTHING;
+            }
+        }
+        return w;
+    }
+
+    /**
+     * 在世界中随机放置玩家（用于新游戏）。
+     * @param seed 用于随机放置的种子
+     * @return 创建的 Player 对象
+     */
+    private Player spawnPlayer(String seed) {
+        Player p = new Player();
+        Player.initPlayer(p, world, seed);
+        return p;
+    }
+
+    /**
+     * 在指定位置放置玩家（用于读档）。
+     * @param x 玩家 X 坐标
+     * @param y 玩家 Y 坐标
+     * @return 创建的 Player 对象
+     */
+    private Player spawnPlayerAt(int x, int y) {
+        return new Player(new Position(x, y));
+    }
+
+    /**
+     * 收集当前游戏状态并保存到文件。
+     * 未来新增游戏机制时，只需在 extraData 中 put 新数据即可。
+     */
+    private void saveGameState() {
+        Logger.section("Save Game");
+        Logger.info("Saving game...");
+        GameSaveData data = new GameSaveData();
+        data.seed = this.seed;
+        data.playerX = player.getPosition().x;
+        data.playerY = player.getPosition().y;
+        SaveLoadManager.save(data);
+        Logger.info("Game saved successfully.");
+    }
+
+    /**
+     * 从文件加载游戏状态并重建世界。
+     * 世界由 seed 确定性重建，玩家位置从存档恢复。
+     * @return 加载成功返回 true，失败返回 false
+     */
+    private boolean loadGameState() {
+        if (!SaveLoadManager.saveExists()) {
+            Logger.info("No save file found.");
+            return false;
+        }
+        GameSaveData data = SaveLoadManager.load();
+        if (data == null) {
+            return false;
+        }
+
+        world = generateWorld(data.seed);
+        player = spawnPlayerAt(data.playerX, data.playerY);
+        entities = new ArrayList<>();
+        entities.add(player);
+        Logger.info("Game loaded successfully.");
+        return true;
     }
 }
