@@ -1,5 +1,6 @@
 package byog.Core;
 
+import byog.Helper.Logger;
 import byog.Helper.MathHelper;
 import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
@@ -13,18 +14,20 @@ import static byog.Core.RandomUtils.uniform;
 public class WorldGenerator {
     public static TETile[][] RandomSquareRoomWrd(TETile[][] world, String seed) {
         if (seed == null || seed.isEmpty()) {
-            seed = String.valueOf(System.currentTimeMillis());  // 使用时间戳作为种子
-            System.out.println("Seed is empty. Using default seed: " + seed);
+            seed = String.valueOf(System.currentTimeMillis());
+            Logger.info("Seed is empty. Using default seed: %s", seed);
         }
         final Random random = new Random(seed.hashCode());
 
-        System.out.println(world.length+" "+world[0].length);
+        Logger.section("World Generation");
+        Logger.debug("World size: %d x %d", world.length, world[0].length);
 
         // Generating random rooms
+        Logger.subsection("Room Generation");
         int C = 80;
         int A = 10;
-        int numberOfRooms = (int) biasUniform(random, C, C+A, 1.5);  //房间数C-C+A间，偏向C
-        System.out.println("Room:"+numberOfRooms);
+        int numberOfRooms = (int) biasUniform(random, C, C+A, 1.5);
+        Logger.debug("Target room count: %d", numberOfRooms);
         ArrayList<SquareRoom> allRoom = new ArrayList<>();
         Loop:
         for (int i = 0; i < numberOfRooms; i++) {
@@ -33,7 +36,7 @@ public class WorldGenerator {
             int xPos = uniform(random, world.length );   //在生成房间位置时，也许已经保证了房间不会出界
             int yPos = uniform(random, world[0].length );
             Position p = new Position(xPos,yPos);
-            System.out.print(roomSize+":"+p+" ");   //for test, don't change it
+            Logger.debug("Room Size: %d, Position: %s", roomSize, p);
             SquareRoom room = new SquareRoom(p, roomSize);
             // 判断房间位置是否合法
             if (!room.isWithinBounds(world)) {
@@ -47,48 +50,44 @@ public class WorldGenerator {
             allRoom.add(room);
         }
 
-        //for test, don't change it
-        System.out.println();
-        System.out.println("Room survive:"+allRoom.size());
-        for (SquareRoom r: allRoom) System.out.print(r.getSize()+":"+r.getPosition()+" ");
+        Logger.info("Surviving rooms: %d", allRoom.size());
+        for (SquareRoom r: allRoom) {
+            Logger.debug("Room Size: %d, Position: %s", r.getSize(), r.getPosition());
+        }
 
-        // adding Rooms
-        System.out.println();
+        Logger.subsection("Adding Rooms to World");
         for (SquareRoom r: allRoom) {
             r.addSelf(world);
         }
 
-
-        // get all Halls
+        Logger.subsection("Hall Generation");
         RoomGraph roomGraph = new RoomGraph(allRoom);
-        System.out.println(roomGraph);  //for test
+        Logger.debug("RoomGraph:\n %s", roomGraph);
         List<Hall>[] allHall = roomGraph.mstAndOtherHalls();
         List<Hall> mstHall = allHall[0];
         List<Hall> otherHall = allHall[1];
-        System.out.println("mst Halls:"+mstHall.size()+" other Halls:"+otherHall.size()+"\n");  //for test
+        Logger.info("MST Halls: %d, Other Halls: %d", mstHall.size(), otherHall.size());
 
-        //add最小生成树Hall
+        Logger.debug("Adding MST Halls:");
         for (Hall h: mstHall) {
-            System.out.println(h.addSelf(world,random));
+            Logger.debug("  Hall: %s", h.addSelf(world, random));
         }
 
-        //add其他Hall
-        int nOfOtherToAdd = (int)( mstHall.size()/1.5);  //确定生成其他走廊数量
-        System.out.println("number of other to add:"+nOfOtherToAdd+"\n");
-        Collections.sort(otherHall, (h1, h2) -> Double.compare(h1.getScale(), h2.getScale()));  // 使用 Comparator 按 scale 排序
-        otherHall.forEach(h -> System.out.println(h.getScale()));   // 按序输出Hall的scale
+        int nOfOtherToAdd = (int)( mstHall.size()/1.5);
+        Logger.info("Other halls to add (poisson): %d", nOfOtherToAdd);
+        Collections.sort(otherHall, (h1, h2) -> Double.compare(h1.getScale(), h2.getScale()));
+        otherHall.forEach(h -> Logger.debug("Hall scale: %.2f", h.getScale()));
         int otherIndecies[] = MathHelper.poissonDistributedIndecies(random, otherHall.size(), nOfOtherToAdd);
-        System.out.print("\npick by poisson:");
+        Logger.debug("Poisson selected indices:");
         for (int i: otherIndecies) {
-            System.out.print(otherHall.get(i).getScale()+" ");
+            Logger.debug("  Hall scale: %.2f", otherHall.get(i).getScale());
         }
-        System.out.println();
+        Logger.debug("Adding other Halls:");
         for (int i: otherIndecies) {
-            System.out.println(otherHall.get(i).addSelf(world,random));
+            Logger.debug("  Hall: %s", otherHall.get(i).addSelf(world, random));
         }
 
-
-        // 将走廊四周围上Wall
+        Logger.subsection("Adding Walls");
         Set<Position> floors = new HashSet<>();
             //记录world中所有的地板，除开最外层一圈。而且理论上此函数生成的world在最外层不会出现floor。
         for (int i = 1; i < world.length-1; i++) {

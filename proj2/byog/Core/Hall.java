@@ -1,5 +1,6 @@
 package byog.Core;
 
+import byog.Helper.Logger;
 import byog.Helper.MathHelper;
 import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
@@ -51,7 +52,6 @@ public class Hall {
             int room2Top = pos2.y + size2 - 1;
             int room2Bottom = pos2.y;
 
-            // 判断所处象限，4个变量构成8种情况，一个变量代表一个象界线
             boolean isHorizontalIntersect = room1Left+1 < room2Right && room2Left+1 < room1Right;   //水平投影重合
             boolean isVerticalIntersect = room1Bottom+1 < room2Top && room2Bottom+1 < room1Top;     //垂直投影重合
             boolean isAtPhase5 = room2Left+1 >= room1Right && room2Bottom+1 >= room1Top;  //右上
@@ -61,7 +61,7 @@ public class Hall {
 
             // phase 1
             if (room1Right < room2Left && isVerticalIntersect) {
-                System.out.println(11111);
+                Logger.debug("Phase 1: Horizontal path from room1 right to room2 left");
                 int[] bound = MathHelper.findMiddleTwo(room1Bottom,room1Top,room2Bottom,room2Top);
                 int Y = uniform(random, bound[0]+1, bound[1]);
                 Position start = new Position(room1Right, Y); // 房间1的右侧
@@ -70,7 +70,7 @@ public class Hall {
 
             // phase 2
             } else if (room1Left > room2Right && isVerticalIntersect) {
-                System.out.println(22222);
+                Logger.debug("Phase 2: Horizontal path from room1 left to room2 right");
                 int[] bound = MathHelper.findMiddleTwo(room1Bottom,room1Top,room2Bottom,room2Top);
                 int Y = uniform(random, bound[0]+1, bound[1]);
                 Position start = new Position(room1Left, Y);  // 房间1的左侧
@@ -79,7 +79,7 @@ public class Hall {
 
             // phase 3
             } else if (room1Bottom > room2Top && isHorizontalIntersect) {
-                System.out.println(33333);
+                Logger.debug("Phase 3: Vertical path from room1 bottom to room2 top");
                 int[] bound = MathHelper.findMiddleTwo(room1Left,room1Right,room2Left,room2Right);
                 int X = uniform(random, bound[0]+1, bound[1]);
                 Position start = new Position(X, room1Bottom); // 房间1的顶部中间
@@ -88,7 +88,7 @@ public class Hall {
 
             // phase 4
             } else if (room1Top < room2Bottom && isHorizontalIntersect) {
-                System.out.println(44444);
+                Logger.debug("Phase 4: Vertical path from room1 top to room2 bottom");
                 int[] bound = MathHelper.findMiddleTwo(room1Left,room1Right,room2Left,room2Right);
                 int X = uniform(random, bound[0]+1, bound[1]);
                 Position start = new Position(X, room1Top); // 房间1的底部中间
@@ -97,7 +97,7 @@ public class Hall {
 
             // phase 5
             } else if (isAtPhase5) {
-                System.out.println(55555);
+                Logger.debug("Phase 5: Bent path, room2 is at upper right");
                 boolean isPathStartVertically = random.nextBoolean();
                 if (isPathStartVertically) {
                     int Xstart = uniform(random, room1Left+1, Math.min(room1Right,room2Left));
@@ -115,7 +115,7 @@ public class Hall {
 
             // phase 6
             } else if (isAtPhase6) {
-                System.out.println(66666);
+                Logger.debug("Phase 6: Bent path, room2 is at upper left");
                 boolean isPathStartVertically = random.nextBoolean();
                 if (isPathStartVertically) {
                     int Xstart = uniform(random, Math.max(room1Left+1,room2Right), room1Right);
@@ -133,7 +133,7 @@ public class Hall {
 
             // phase 7
             } else if (isAtPhase7) {
-                System.out.println(77777);
+                Logger.debug("Phase 7: Bent path, room2 is at lower left");
                 boolean isPathStartVertically = random.nextBoolean();
                 if (isPathStartVertically) {
                     int Xstart = uniform(random, Math.max(room1Left+1,room2Right), room1Right);   //2:as6
@@ -151,7 +151,7 @@ public class Hall {
 
             // phase 8
             } else if (isAtPhase8) {
-                System.out.println(88888);
+                Logger.debug("Phase 8: Bent path, room2 is at lower right");
                 boolean isPathStartVertically = random.nextBoolean();
                 if (isPathStartVertically) {
                     int Xstart = uniform(random, room1Left+1, Math.min(room1Right,room2Left));  //3:as5
@@ -198,8 +198,7 @@ public class Hall {
         for (Position pos : path) {
             world[pos.x][pos.y] = Tileset.FLOOR;
         }
-        // for test
-        System.out.println("path len:"+path.size()+" from"+start+"to"+end);
+        Logger.debug("Straight path length: %d, from %s to %s", path.size(), start, end);
     }
 
     /**
@@ -229,8 +228,7 @@ public class Hall {
         for (Position pos : path) {
             world[pos.x][pos.y] = Tileset.FLOOR;
         }
-        // for test
-        System.out.println("BEND path len:"+path.size()+" from"+start+"to"+end);  //走廊长度总是多一个，因为拐角处多算了一次
+        Logger.debug("Bent path length: %d, from %s to %s", path.size(), start, end);
     }
 }
 

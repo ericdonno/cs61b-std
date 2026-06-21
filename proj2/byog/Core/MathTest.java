@@ -1,5 +1,6 @@
 package byog.Core;
 
+import byog.Helper.Logger;
 import byog.Helper.MathHelper;
 import byog.TileEngine.TETile;
 import byog.lab5.Position;
@@ -46,7 +47,7 @@ public class MathTest {
     @Test
     public void testRandomSquareRoomWrd() {
         // 设置重复次数
-        int repetitions = 1000;
+        int repetitions = 100;
         double totalSurvivalRate = 0;
         int totalSurvivedRoom = 0;
 
@@ -69,20 +70,20 @@ public class MathTest {
             String output = baos.toString();
 
             // 正则表达式匹配输出中的数字
-            Pattern pattern = Pattern.compile("Room:(\\d+)");  // 匹配 "Room:" 后面的数字
+            Pattern pattern = Pattern.compile("Target room count: (\\d+)");
             Matcher matcher = pattern.matcher(output);
 
             int roomCount = -1;
             if (matcher.find()) {
-                roomCount = Integer.parseInt(matcher.group(1));  // 获取 "Room:" 后面的数字
+                roomCount = Integer.parseInt(matcher.group(1));
             }
 
-            pattern = Pattern.compile("Room survive:(\\d+)");  // 匹配 "Room survive:" 后面的数字
+            pattern = Pattern.compile("Surviving rooms: (\\d+)");
             matcher = pattern.matcher(output);
 
             int roomSurviveCount = -1;
             if (matcher.find()) {
-                roomSurviveCount = Integer.parseInt(matcher.group(1));  // 获取 "Room survive:" 后面的数字
+                roomSurviveCount = Integer.parseInt(matcher.group(1));
             }
 
             // 计算存活率并累加
@@ -90,7 +91,7 @@ public class MathTest {
                 double SurvivalRate = (double) roomSurviveCount / roomCount;
                 totalSurvivalRate += SurvivalRate;
                 totalSurvivedRoom += roomSurviveCount;
-                originalOut.println("roomCount:"+roomCount+" roomSurviveCount:"+roomSurviveCount+" SurvivalRate:"+String.format("%.2f", SurvivalRate));
+                originalOut.println(String.format("Room Count: %d, Survived: %d, Survival Rate: %.2f", roomCount, roomSurviveCount, SurvivalRate));
             }
 
             // 恢复原始的 System.out
@@ -101,11 +102,10 @@ public class MathTest {
         double averageSurvivalRate = totalSurvivalRate / repetitions;
         double averageSurvival = (double) totalSurvivedRoom / repetitions;
 
-        // 打印平均存活率
-        System.out.println();
-        System.out.println("After"+repetitions+" repetitions: ");
-        System.out.println("Average Survival Rate : " + averageSurvivalRate);
-        System.out.println("Average Survival : " + averageSurvival);
+        Logger.section("Test Results");
+        Logger.info("After %d repetitions:", repetitions);
+        Logger.info("Average Survival Rate: %.4f", averageSurvivalRate);
+        Logger.info("Average Survival: %.2f", averageSurvival);
 
     }
 

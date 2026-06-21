@@ -1,5 +1,6 @@
 package byog.Core;
 
+import byog.Helper.Logger;
 import byog.TileEngine.TERenderer;
 import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
@@ -40,18 +41,43 @@ public class Game {
                 world[x][y] = Tileset.NOTHING;
             }
         }
+        boolean wrdGenerated = false;
 
         // deal with input
-        char starter = input.charAt(0);
-        if (starter == 'n') {
-            int indexQuit = input.indexOf(":q");
-            String seed = (indexQuit == -1)
-                    ? input.substring(1)
-                    : input.substring(1, indexQuit);
-            world = WorldGenerator.RandomSquareRoomWrd(world, seed);
+        input = input.toLowerCase();
+        int index = 0;
+        while (index < input.length()) {
+            char c = input.charAt(index);
+            if (c == 'n') {
+                index++;
+                StringBuilder seedStr = new StringBuilder();
+                while (index < input.length() && Character.isDigit(input.charAt(index))) {
+                    seedStr.append(input.charAt(index));
+                    index++;
+                }
+                if (index < input.length() && input.charAt(index) == 's') {
+                    index++;
+                    world = WorldGenerator.RandomSquareRoomWrd(world, seedStr.toString());
+                    wrdGenerated = true;
+                } else {
+                    Logger.error("Seeds end with 's'.");
+                    System.exit(0);
+                }
+            } else if (c == 'l') {
+                index++;
+                //加载游戏
+                wrdGenerated = true;
+            } else if (c == ':') {
+                index++;
+                if (index < input.length() && input.charAt(index) == 'q') {
+                    //保存游戏
+                }
+            } else if (wrdGenerated) {
+                //处理玩家输入
+            }
         }
 
-        // To draw, don't uncomment this when testing "Survivals"
+        // To draw, for tests, comment this when testing "Survivals" or publishing
         TERenderer ter = new TERenderer();
         ter.initialize(WIDTH, HEIGHT);
         ter.renderFrame(world);
