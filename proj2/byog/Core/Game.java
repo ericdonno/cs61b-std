@@ -7,7 +7,9 @@ import byog.TileEngine.Tileset;
 import byog.lab5.Position;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class Game {
     TERenderer ter = new TERenderer();
@@ -17,6 +19,12 @@ public class Game {
     private TETile[][] world;
     private Player player;
     private List<Entity> entities;
+    private Map<Character, Runnable> keyBindings;
+
+    // 游戏状态枚举
+    private enum GameState {
+        MENU, SEED_INPUT, PLAYING, QUIT_PENDING
+    }
 
     /**
      * Method used for playing a fresh game. The game should start from the main menu.
@@ -37,11 +45,7 @@ public class Game {
      * @return the 2D TETile[][] representing the state of the world
      */
     public TETile[][] playWithInputString(String input) {
-        // TODO: Fill out this method to run the game using the input passed in,
-        // and return a 2D tile representation of the world that would have been
-        // drawn if the same inputs had been given to playWithKeyboard().
-
-        // initialize tiles
+        // 初始化世界和实体
         world = new TETile[WIDTH][HEIGHT];
         for (int x = 0; x < WIDTH; x += 1) {
             for (int y = 0; y < HEIGHT; y += 1) {
@@ -49,53 +53,74 @@ public class Game {
             }
         }
         entities = new ArrayList<>();
-        boolean wrdGenerated = false;
         player = null;
 
-        // deal with input
+        // 状态机初始化
+        GameState currentState = GameState.MENU;
+        StringBuilder seedStr = new StringBuilder();
         input = input.toLowerCase();
-        int index = 0;
-        String seed = null;
-        while (index < input.length()) {
-            char c = input.charAt(index);
-            if (c == 'n') {
-                index++;
-                StringBuilder seedStr = new StringBuilder();
-                while (index < input.length() && Character.isDigit(input.charAt(index))) {  // 读取种子序列
-                    seedStr.append(input.charAt(index));
-                    index++;
-                }
-                seed = seedStr.toString();
-                if (index < input.length() && input.charAt(index) == 's') {
-                    index++;
-                    world = WorldGenerator.RandomSquareRoomWrd(world, seed);
-                    wrdGenerated = true;
-                    player = new Player();
-                    Player.initPlayer(player, world, seed);
-                    entities.add(player);
-                } else {
-                    Logger.error("Seeds end with 's'.");
-                    System.exit(0);
-                }
-            } else if (c == 'l') {
-                index++;
-                //加载游戏
-                wrdGenerated = true;
-            } else if (c == ':') {
-                index++;
-                if (index < input.length() && input.charAt(index) == 'q') {
-                    //保存游戏
-                }
-            } else if (wrdGenerated && player != null) {
-                //处理玩家输入
-                handlePlayerInput(c);
-                index++;
-            } else {
-                index++;
+
+        // 初始化键位映射
+        initKeyBindings();
+
+        // 逐个字符处理，绝对不需要在循环体内部手动改变 i 的值
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+
+            switch (currentState) {
+                case MENU:
+                    if (c == 'n') {
+                        currentState = GameState.SEED_INPUT; // 切换状态：准备接收数字
+                    } else if (c == 'l') {
+                        // TODO: 加载游戏存档逻辑
+                        currentState = GameState.PLAYING;    // 加载完毕，进入游玩状态
+                    } else if (c == 'q') {
+                        // 退出游戏 (在此方法中可能直接 return 当前空帧)
+                        return renderFrame();
+                    }
+                    break;
+
+                case SEED_INPUT:
+                    if (Character.isDigit(c)) {
+                        seedStr.append(c); // 收集数字，状态不改变
+                    } else if (c == 's') {
+                        // 种子输入完毕，开始生成世界
+                        String seed = seedStr.toString();
+                        world = WorldGenerator.RandomSquareRoomWrd(world, seed);
+                        player = new Player();
+                        Player.initPlayer(player, world, seed);
+                        entities.add(player);
+
+                        currentState = GameState.PLAYING; // 世界生成完毕，进入游玩状态
+                    } else {
+                        // 处理异常输入，或者忽略
+                        Logger.error("Invalid character in seed input.");
+                    }
+                    break;
+
+                case PLAYING:
+                    if (c == ':') {
+                        currentState = GameState.QUIT_PENDING; // 玩家按下了 ':'，进入待退出状态
+                    } else {
+                        handlePlayerInput(c); // 正常处理 w, a, s, d 移动
+                    }
+                    break;
+
+                case QUIT_PENDING:
+                    if (c == 'q') {
+                        // TODO: 保存游戏存档逻辑
+                        // 存档后退出 (对于 String 方法通常是停止处理并返回)
+                        return renderFrame();
+                    } else {
+                        // 如果按了 ':' 但紧接着按的不是 'q' (比如误触)，退回游玩状态
+                        currentState = GameState.PLAYING;
+                        handlePlayerInput(c); // 把这个字符当做正常操作处理
+                    }
+                    break;
             }
         }
 
-        // 加载世界状态
+        // 渲染并返回最终帧
         TETile[][] frame = renderFrame();
 
         // To draw, for tests, comment this when testing "Survivals" or publishing
@@ -107,40 +132,46 @@ public class Game {
     }
 
     /**
-     * Change the player's
+     * find the function for the input character and run it.
      * */
     private void handlePlayerInput(char c) {
-        Player.Direction dir = null;
-        switch (c) {
-            case 'w':
-                dir = Player.Direction.UP;
-                break;
-            case 's':
-                dir = Player.Direction.DOWN;
-                break;
-            case 'a':
-                dir = Player.Direction.LEFT;
-                break;
-            case 'd':
-                dir = Player.Direction.RIGHT;
-                break;
-            default:
-                return;
+        Runnable action = keyBindings.get(c);
+        if (action != null) {
+            action.run();
+        } else {
+            Logger.error("Unbind Key \"%c\"", c);
         }
-
-        player.move(dir, this::canMoveTo);
     }
 
-    private boolean canMoveTo(Position p) {
+    private void initKeyBindings() {
+        keyBindings = new HashMap<>();
+
+        // 1. 基础移动 (利用 Lambda 表达式)
+        keyBindings.put('w', () -> movePlayer(player, Direction.UP));
+        keyBindings.put('s', () -> movePlayer(player, Direction.DOWN));
+        keyBindings.put('a', () -> movePlayer(player, Direction.LEFT));
+        keyBindings.put('d', () -> movePlayer(player, Direction.RIGHT));
+    }
+
+
+    private void movePlayer(Player player, Direction direction) {
+        player.move(direction, this::isPlayerColliding);
+    }
+
+    /**
+     * Collision Detection
+     * Rule: a player stands on floors, and cannot walk on an entity
+     * */
+    private boolean isPlayerColliding(Position p) {
         if (!Player.canMoveTo(p, world)) {
-            return false;
+            return true;
         }
         for (Entity e : entities) {
-            if (e != player && e.getPosition().equals(p)) {
-                return false;
+            if (e == player && e.getPosition().equals(p)) {
+                return true;
             }
         }
-        return true;
+        return false;
     }
 
     /**

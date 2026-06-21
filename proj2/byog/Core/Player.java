@@ -11,9 +11,6 @@ import java.util.function.Predicate;
 import static byog.Core.RandomUtils.uniform;
 
 public class Player extends Entity {
-    public enum Direction {
-        UP, DOWN, LEFT, RIGHT
-    }
 
     public Player() {
         super(new Position(0, 0), Tileset.PLAYER);
@@ -26,17 +23,14 @@ public class Player extends Entity {
     /**
      * move a player in certain world
      */
-    public void move(Direction direction, Predicate<Position> canMove) {
+    public void move(Direction direction, Predicate<Position> isPlayerColliding) {
         Position newPos = getNewPosition(direction);
-        if (canMove.test(newPos)) {
+        if (!isPlayerColliding.test(newPos)) {
             this.position = newPos;
         }
     }
 
-    /**
-     * move a player in certain world
-     */
-    public Position getNewPosition(Direction direction) {
+    private Position getNewPosition(Direction direction) {
         int x = position.x;
         int y = position.y;
         switch (direction) {
@@ -59,7 +53,7 @@ public class Player extends Entity {
     }
 
     /**
-     * collision detection
+     * player can only stand on floors
      */
     public static boolean canMoveTo(Position p, TETile[][] world) {
         if (p.x < 0 || p.x >= world.length || p.y < 0 || p.y >= world[0].length) {
