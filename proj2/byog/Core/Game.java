@@ -4,12 +4,19 @@ import byog.Helper.Logger;
 import byog.TileEngine.TERenderer;
 import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
+import byog.lab5.Position;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class Game {
     TERenderer ter = new TERenderer();
-    /* Feel free to change the width and height. */
     public static final int WIDTH = 80;
     public static final int HEIGHT = 30;
+
+    private TETile[][] world;
+    private Player player;
+    private List<Entity> entities;
 
     /**
      * Method used for playing a fresh game. The game should start from the main menu.
@@ -35,30 +42,37 @@ public class Game {
         // drawn if the same inputs had been given to playWithKeyboard().
 
         // initialize tiles
-        TETile[][] world = new TETile[WIDTH][HEIGHT];
+        world = new TETile[WIDTH][HEIGHT];
         for (int x = 0; x < WIDTH; x += 1) {
             for (int y = 0; y < HEIGHT; y += 1) {
                 world[x][y] = Tileset.NOTHING;
             }
         }
+        entities = new ArrayList<>();
         boolean wrdGenerated = false;
+        player = null;
 
         // deal with input
         input = input.toLowerCase();
         int index = 0;
+        String seed = null;
         while (index < input.length()) {
             char c = input.charAt(index);
             if (c == 'n') {
                 index++;
                 StringBuilder seedStr = new StringBuilder();
-                while (index < input.length() && Character.isDigit(input.charAt(index))) {
+                while (index < input.length() && Character.isDigit(input.charAt(index))) {  // 读取种子序列
                     seedStr.append(input.charAt(index));
                     index++;
                 }
+                seed = seedStr.toString();
                 if (index < input.length() && input.charAt(index) == 's') {
                     index++;
-                    world = WorldGenerator.RandomSquareRoomWrd(world, seedStr.toString());
+                    world = WorldGenerator.RandomSquareRoomWrd(world, seed);
                     wrdGenerated = true;
+                    player = new Player();
+                    Player.initPlayer(player, world, seed);
+                    entities.add(player);
                 } else {
                     Logger.error("Seeds end with 's'.");
                     System.exit(0);
@@ -72,16 +86,76 @@ public class Game {
                 if (index < input.length() && input.charAt(index) == 'q') {
                     //保存游戏
                 }
-            } else if (wrdGenerated) {
+            } else if (wrdGenerated && player != null) {
                 //处理玩家输入
+                handlePlayerInput(c);
+                index++;
+            } else {
+                index++;
             }
         }
+
+        // 加载世界状态
+        TETile[][] frame = renderFrame();
 
         // To draw, for tests, comment this when testing "Survivals" or publishing
         TERenderer ter = new TERenderer();
         ter.initialize(WIDTH, HEIGHT);
-        ter.renderFrame(world);
+        ter.renderFrame(frame);
 
-        return world;
+        return frame;
+    }
+
+    /**
+     * Change the player's
+     * */
+    private void handlePlayerInput(char c) {
+        Player.Direction dir = null;
+        switch (c) {
+            case 'w':
+                dir = Player.Direction.UP;
+                break;
+            case 's':
+                dir = Player.Direction.DOWN;
+                break;
+            case 'a':
+                dir = Player.Direction.LEFT;
+                break;
+            case 'd':
+                dir = Player.Direction.RIGHT;
+                break;
+            default:
+                return;
+        }
+
+        player.move(dir, this::canMoveTo);
+    }
+
+    private boolean canMoveTo(Position p) {
+        if (!Player.canMoveTo(p, world)) {
+            return false;
+        }
+        for (Entity e : entities) {
+            if (e != player && e.getPosition().equals(p)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * combine the world and entities
+     * */
+    public TETile[][] renderFrame() {
+        TETile[][] frame = TETile.copyOf(world);
+        Position p = player.getPosition();
+        frame[p.x][p.y] = player.getTile();
+        for (Entity e : entities) {
+            if (e != player) {
+                Position ep = e.getPosition();
+                frame[ep.x][ep.y] = e.getTile();
+            }
+        }
+        return frame;
     }
 }
