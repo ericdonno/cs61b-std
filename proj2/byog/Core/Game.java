@@ -5,6 +5,7 @@ import byog.TileEngine.TERenderer;
 import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
 import byog.lab5.Position;
+import edu.princeton.cs.introcs.StdDraw;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -24,13 +25,149 @@ public class Game {
 
     // 游戏状态枚举
     private enum GameState {
-        MENU, SEED_INPUT, PLAYING, QUIT_PENDING
+        MENU, SEED_INPUT, PLAYING, QUIT_PENDING, QUIT
     }
 
     /**
      * Method used for playing a fresh game. The game should start from the main menu.
      */
     public void playWithKeyboard() {
+        // 初始化
+        ter.initialize(WIDTH, HEIGHT);
+        entities = new ArrayList<>();
+        player = null;
+        initKeyBindings();
+
+        // 状态机
+        GameState currentState = GameState.MENU;
+        StringBuilder seedStr = new StringBuilder();
+
+        // 主循环
+        while (currentState != GameState.QUIT) {
+            // 处理输入
+            if (StdDraw.hasNextKeyTyped()) {
+                char c = Character.toLowerCase(StdDraw.nextKeyTyped());
+                currentState = processInput(currentState, c, seedStr);
+            }
+
+            // 绘制
+            draw(currentState, seedStr.toString());
+
+            StdDraw.show();
+            StdDraw.pause(16);
+        }
+    }
+
+    /**
+     * 处理输入的核心状态机方法，由 {@link #playWithKeyboard} 和 {@link #playWithInputString} 共用。
+     * <p>
+     * 根据当前游戏状态和输入字符，执行相应操作并返回下一状态：
+     * <ul>
+     *   <li><b>MENU</b>：{@code n} 进入种子输入，{@code l} 加载存档，{@code q} 退出</li>
+     *   <li><b>SEED_INPUT</b>：数字追加到 seedStr，{@code s} 确认种子并生成世界、进入 PLAYING</li>
+     *   <li><b>PLAYING</b>：字符交由 {@link #handlePlayerInput} 处理玩家操作</li>
+     *   <li><b>QUIT_PENDING</b>："{@code :}" 进入退出待确认，
+     *   {@code q} 保存并退出，其余字符取消退出并正常处理</li>
+     * </ul>
+     *
+     * @param state   当前游戏状态
+     * @param c       用户输入的字符（已转为小写）
+     * @param seedStr 种子字符串构建器，在 SEED_INPUT 状态下收集数字
+     * @return 转换后的下一个游戏状态；若无状态变化则返回原 state
+     */
+    private GameState processInput(GameState state, char c, StringBuilder seedStr) {
+        switch (state) {
+            case MENU:
+                if (c == 'n') {
+                    return GameState.SEED_INPUT;
+                } else if (c == 'l') {
+                    if (loadGameState()) {
+                        Logger.section("Game started (loaded save).");
+                        return GameState.PLAYING;
+                    }
+                    return GameState.MENU;
+                } else if (c == 'q') {
+                    return GameState.QUIT;
+                }
+                return state;
+
+            case SEED_INPUT:
+                if (Character.isDigit(c)) {
+                    seedStr.append(c);
+                } else if (c == 's') {
+                    world = generateWorld(seedStr.toString());
+                    player = spawnPlayer(this.seed);
+                    entities.add(player);
+                    Logger.section("Game started (new game).");
+                    return GameState.PLAYING;
+                } else {
+                    Logger.error("Invalid character in seed input.");
+                }
+                return state;
+
+            case PLAYING:
+                if (c == ':') {
+                    return GameState.QUIT_PENDING;
+                } else {
+                    handlePlayerInput(c);
+                }
+                return state;
+
+            case QUIT_PENDING:
+                if (c == 'q') {
+                    saveGameState();
+                    return GameState.QUIT;
+                } else {
+                    handlePlayerInput(c);
+                    return GameState.PLAYING;
+                }
+
+            default:
+                return state;
+        }
+    }
+
+    /**
+     * 根据状态绘制画面
+     */
+    private void draw(GameState state, String seed) {
+        switch (state) {
+            case MENU:
+                drawMenu();
+                break;
+            case SEED_INPUT:
+                drawSeedInput(seed);
+                break;
+            case PLAYING:
+            case QUIT_PENDING:
+                ter.renderFrame(renderFrame());
+                break;
+            default:
+                break;
+        }
+    }
+
+    /**
+     * 绘制主菜单
+     */
+    private void drawMenu() {
+        StdDraw.clear(StdDraw.BLACK);
+        StdDraw.setPenColor(StdDraw.WHITE);
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 + 3, "CS61B: Build Your Own Game");
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0, "New Game (N)");
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 - 1, "Load Game (L)");
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 - 2, "Quit (Q)");
+    }
+
+    /**
+     * 绘制种子输入界面
+     */
+    private void drawSeedInput(String seed) {
+        StdDraw.clear(StdDraw.BLACK);
+        StdDraw.setPenColor(StdDraw.WHITE);
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 + 2, "Enter seed number:");
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0, seed.isEmpty() ? "" : seed);
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 - 2, "Press 'S' to start");
     }
 
     /**
@@ -58,63 +195,14 @@ public class Game {
         // 初始化键位映射
         initKeyBindings();
 
-        // 逐个字符处理，绝对不需要在循环体内部手动改变 i 的值
+        // 逐个字符处理
         for (int i = 0; i < input.length(); i++) {
             char c = input.charAt(i);
+            currentState = processInput(currentState, c, seedStr);
 
-            switch (currentState) {
-                case MENU:
-                    if (c == 'n') {
-                        currentState = GameState.SEED_INPUT; // 切换状态：准备接收数字
-                    } else if (c == 'l') {
-                        // 加载游戏存档逻辑
-                        if (loadGameState()) {
-                            Logger.section("Game started (loaded save).");
-                            currentState = GameState.PLAYING;    // 加载完毕，进入游玩状态
-                        }
-                    } else if (c == 'q') {
-                        // 退出游戏 (在此方法中可能直接 return 当前空帧)
-                        return renderFrame();
-                    }
-                    break;
-
-                case SEED_INPUT:
-                    if (Character.isDigit(c)) {
-                        seedStr.append(c); // 收集数字，状态不改变
-                    } else if (c == 's') {
-                        // 种子输入完毕，开始生成世界
-                        world = generateWorld(seedStr.toString());
-                        player = spawnPlayer(this.seed);
-                        entities.add(player);
-
-                        Logger.section("Game started (new game).");
-                        currentState = GameState.PLAYING; // 世界生成完毕，进入游玩状态
-                    } else {
-                        // 处理异常输入，或者忽略
-                        Logger.error("Invalid character in seed input.");
-                    }
-                    break;
-
-                case PLAYING:
-                    if (c == ':') {
-                        currentState = GameState.QUIT_PENDING; // 玩家按下了 ':'，进入待退出状态
-                    } else {
-                        handlePlayerInput(c); // 正常处理 w, a, s, d 移动
-                    }
-                    break;
-
-                case QUIT_PENDING:
-                    if (c == 'q') {
-                        // 保存游戏存档逻辑
-                        saveGameState();
-                        // 存档后退出 (对于 String 方法通常是停止处理并返回)
-                        return renderFrame();
-                    } else {
-                        // 如果按了 ':' 但紧接着按的不是 'q' (比如误触)，退回游玩状态
-                        currentState = GameState.PLAYING;
-                        handlePlayerInput(c); // 把这个字符当做正常操作处理
-                    }
-                    break;
+            // 处理需要立即返回的情况
+            if (currentState == GameState.QUIT) {
+                return renderFrame();
             }
         }
 
