@@ -1,14 +1,10 @@
 package byog.Core;
 
-import byog.Helper.Logger;
 import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
 import byog.lab5.Position;
 
-import java.util.Random;
 import java.util.function.Predicate;
-
-import static byog.Core.RandomUtils.uniform;
 
 public class Player extends Entity {
 
@@ -56,29 +52,14 @@ public class Player extends Entity {
      * player can only stand on floors
      */
     public static boolean canMoveTo(Position p, TETile[][] world) {
-        if (p.x < 0 || p.x >= world.length || p.y < 0 || p.y >= world[0].length) {
-            return false;
-        }
-        TETile tile = world[p.x][p.y];
-        return tile != Tileset.WALL && tile != Tileset.NOTHING;
+        return Entity.canMoveTo(p, world);
     }
 
     /**
      * initialize a player in the certain world (or not)
      */
     public static void initPlayer(Player player, TETile[][] world, String seed) {
-        if (seed == null || seed.isEmpty()) {
-            seed = String.valueOf(System.currentTimeMillis());
-            Logger.info("Seed is empty. Using default seed: %s", seed);
-        }
-        final Random random = new Random(seed.hashCode());
-
-        int xPos, yPos;
-        while (!canMoveTo(player.position, world)) {
-            xPos = uniform(random, world.length);
-            yPos = uniform(random, world[0].length);
-            player.position = new Position(xPos, yPos);
-        }
+        Entity.initEntity(player, world, seed);
     }
 
     public static void initPlayer(Player player) {

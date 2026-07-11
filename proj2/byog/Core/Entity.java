@@ -1,7 +1,13 @@
 package byog.Core;
 
+import byog.Helper.Logger;
 import byog.TileEngine.TETile;
+import byog.TileEngine.Tileset;
 import byog.lab5.Position;
+
+import java.util.Random;
+
+import static byog.Core.RandomUtils.uniform;
 
 public abstract class Entity {
     protected Position position;
@@ -26,5 +32,34 @@ public abstract class Entity {
 
     public void setTile(TETile tile) {
         this.tile = tile;
+    }
+
+    /**
+     * 判断实体是否可以移动到指定位置（只能站在地板上）
+     */
+    public static boolean canMoveTo(Position p, TETile[][] world) {
+        if (p.x < 0 || p.x >= world.length || p.y < 0 || p.y >= world[0].length) {
+            return false;
+        }
+        TETile tile = world[p.x][p.y];
+        return tile != Tileset.WALL && tile != Tileset.NOTHING;
+    }
+
+    /**
+     * 使用 seed 在世界中随机放置实体
+     */
+    public static void initEntity(Entity entity, TETile[][] world, String seed) {
+        if (seed == null || seed.isEmpty()) {
+            seed = String.valueOf(System.currentTimeMillis());
+            Logger.info("Seed is empty. Using default seed: %s", seed);
+        }
+        final Random random = new Random(seed.hashCode());
+
+        int xPos, yPos;
+        while (!canMoveTo(entity.position, world)) {
+            xPos = uniform(random, world.length);
+            yPos = uniform(random, world[0].length);
+            entity.position = new Position(xPos, yPos);
+        }
     }
 }

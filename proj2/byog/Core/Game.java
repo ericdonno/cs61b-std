@@ -20,6 +20,7 @@ public class Game {
     private TETile[][] world;
     private Player player;
     private List<Entity> entities;
+    private List<Enemy> enemies;     // 给AI tick用的
     private Map<Character, Runnable> keyBindings;
     private String seed;
 
@@ -35,6 +36,7 @@ public class Game {
         // 初始化
         ter.initialize(WIDTH, HEIGHT);
         entities = new ArrayList<>();
+        enemies = new ArrayList<>();
         player = null;
         initKeyBindings();
 
@@ -98,6 +100,9 @@ public class Game {
                     world = generateWorld(seedStr.toString());
                     player = spawnPlayer(this.seed);
                     entities.add(player);
+                    Enemy enemy = spawnEnemy(this.seed);
+                    entities.add(enemy);
+                    enemies.add(enemy);
                     Logger.section("Game started (new game).");
                     return GameState.PLAYING;
                 } else {
@@ -140,7 +145,7 @@ public class Game {
                 break;
             case PLAYING:
             case QUIT_PENDING:
-                ter.renderFrame(renderFrame());
+                ter.renderFrame(buildActiveFrame());
                 break;
             default:
                 break;
@@ -169,6 +174,8 @@ public class Game {
         StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0, seed.isEmpty() ? "" : seed);
         StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 - 2, "Press 'S' to start");
     }
+
+
 
     /**
      * Method used for autograding and testing the game code. The input string will be a series
@@ -202,12 +209,12 @@ public class Game {
 
             // 处理需要立即返回的情况
             if (currentState == GameState.QUIT) {
-                return renderFrame();
+                return buildActiveFrame();
             }
         }
 
         // 渲染并返回最终帧
-        TETile[][] frame = renderFrame();
+        TETile[][] frame = buildActiveFrame();
 
         // To draw, for tests, comment this when testing "Survivals" or publishing
         TERenderer ter = new TERenderer();
@@ -260,9 +267,9 @@ public class Game {
     }
 
     /**
-     * combine the world and entities
+     * 组合世界地图和实体，构建当前活动帧的瓦片数组。
      * */
-    public TETile[][] renderFrame() {
+    public TETile[][] buildActiveFrame() {
         TETile[][] frame = TETile.copyOf(world);
         Position p = player.getPosition();
         frame[p.x][p.y] = player.getTile();
@@ -296,6 +303,7 @@ public class Game {
 
     /**
      * 在世界中随机放置玩家（用于新游戏）。
+     * 注意：唯一的player对象在此方法中创建
      * @param seed 用于随机放置的种子
      * @return 创建的 Player 对象
      */
@@ -313,6 +321,18 @@ public class Game {
      */
     private Player spawnPlayerAt(int x, int y) {
         return new Player(new Position(x, y));
+    }
+
+    /**
+     * 在世界中随机放置敌人（用于新游戏）。
+     * @param seed 用于随机放置的种子
+     * @return 创建的 Enemy 对象
+     */
+    private Enemy spawnEnemy(String seed) {
+        final java.util.Random random = new java.util.Random(seed.hashCode());
+        Enemy enemy = new Enemy(new Position(0, 0), random);
+        Entity.initEntity(enemy, world, seed);
+        return enemy;
     }
 
     /**
@@ -349,6 +369,9 @@ public class Game {
         player = spawnPlayerAt(data.playerX, data.playerY);
         entities = new ArrayList<>();
         entities.add(player);
+        Enemy enemy = spawnEnemy(data.seed);
+        entities.add(enemy);
+        enemies.add(enemy);
         Logger.info("Game loaded successfully.");
         return true;
     }
