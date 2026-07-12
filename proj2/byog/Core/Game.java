@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 
 public class Game {
     TERenderer ter = new TERenderer();
@@ -19,8 +20,7 @@ public class Game {
 
     private TETile[][] world;
     private Player player;
-    private List<Entity> entities;
-    private List<Enemy> enemies;     // 给AI tick用的
+    private EntityManager entityMgr;
     private Map<Character, Runnable> keyBindings;
     private String seed;
 
@@ -35,8 +35,7 @@ public class Game {
     public void playWithKeyboard() {
         // 初始化
         ter.initialize(WIDTH, HEIGHT);
-        entities = new ArrayList<>();
-        enemies = new ArrayList<>();
+        entityMgr = new EntityManager();
         player = null;
         initKeyBindings();
 
@@ -50,6 +49,17 @@ public class Game {
             if (StdDraw.hasNextKeyTyped()) {
                 char c = Character.toLowerCase(StdDraw.nextKeyTyped());
                 currentState = processInput(currentState, c, seedStr);
+            }
+
+            // Enemies AI tick
+            if (currentState == GameState.PLAYING) {
+                for (Entity e : entityMgr.getAllEntities()) {
+                    if (e instanceof Enemy enemy && e.isAlive()) {
+                        enemy.updateAI(world, entityMgr);
+                    }
+                }
+                entityMgr.flushPendingChanges();
+                entityMgr.removeDeadEntities();
             }
 
             // 绘制
@@ -98,11 +108,15 @@ public class Game {
                     seedStr.append(c);
                 } else if (c == 's') {
                     world = generateWorld(seedStr.toString());
+                    // 添加玩家
                     player = spawnPlayer(this.seed);
-                    entities.add(player);
-                    Enemy enemy = spawnEnemy(this.seed);
-                    entities.add(enemy);
-                    enemies.add(enemy);
+                    addEntity(player);
+                    // 添加敌人
+                    List<Enemy> enemies = Enemy.spawnEnemies(world, this.seed, player.getPosition());
+                    for (Enemy e : enemies) {
+                        addEntity(e);
+                    }
+
                     Logger.section("Game started (new game).");
                     return GameState.PLAYING;
                 } else {
@@ -191,7 +205,7 @@ public class Game {
      */
     public TETile[][] playWithInputString(String input) {
         // 初始化世界和实体
-        entities = new ArrayList<>();
+        entityMgr = new EntityManager();
         player = null;
 
         // 状态机初始化
@@ -247,39 +261,41 @@ public class Game {
     }
 
     private void movePlayer(Player player, Direction direction) {
-        player.move(direction, this::isPlayerColliding);
-    }
-
-    /**
-     * Collision Detection
-     * Rule: a player stands on floors, and cannot walk on an entity
-     * */
-    private boolean isPlayerColliding(Position p) {
-        if (!Player.canMoveTo(p, world)) {
-            return true;
-        }
-        for (Entity e : entities) {
-            if (e == player && e.getPosition().equals(p)) {
-                return true;
-            }
-        }
-        return false;
+        player.move(direction, world, entityMgr);
     }
 
     /**
      * 组合世界地图和实体，构建当前活动帧的瓦片数组。
      * */
     public TETile[][] buildActiveFrame() {
+        if (world == null || player == null) {
+            return createEmptyWorld();
+        }
         TETile[][] frame = TETile.copyOf(world);
         Position p = player.getPosition();
         frame[p.x][p.y] = player.getTile();
-        for (Entity e : entities) {
-            if (e != player) {
+        for (Entity e : entityMgr.getAllEntities()) {
+            if (e != player && e.isAlive()) {
                 Position ep = e.getPosition();
                 frame[ep.x][ep.y] = e.getTile();
             }
         }
         return frame;
+    }
+
+    /** 添加实体到空间索引。 */
+    private void addEntity(Entity e) {
+        entityMgr.addEntity(e);
+    }
+
+    /** 从空间索引移除实体。 */
+    private void removeEntity(Entity e) {
+        entityMgr.removeEntity(e);
+    }
+
+    /** 供外部在帧中任意时刻请求添加实体，帧末统一执行。 */
+    public void requestAddEntity(Entity e) {
+        entityMgr.requestAddEntity(e);
     }
 
     /**
@@ -324,20 +340,8 @@ public class Game {
     }
 
     /**
-     * 在世界中随机放置敌人（用于新游戏）。
-     * @param seed 用于随机放置的种子
-     * @return 创建的 Enemy 对象
-     */
-    private Enemy spawnEnemy(String seed) {
-        final java.util.Random random = new java.util.Random(seed.hashCode());
-        Enemy enemy = new Enemy(new Position(0, 0), random);
-        Entity.initEntity(enemy, world, seed);
-        return enemy;
-    }
-
-    /**
      * 收集当前游戏状态并保存到文件。
-     * 未来新增游戏机制时，只需在 extraData 中 put 新数据即可。
+     * 将所有实体状态序列化到 extraData.entityStates，确保 HP、存活状态等在读档后一致。
      */
     private void saveGameState() {
         Logger.section("Save Game");
@@ -346,13 +350,34 @@ public class Game {
         data.seed = this.seed;
         data.playerX = player.getPosition().x;
         data.playerY = player.getPosition().y;
+
+        List<EntityState> states = new ArrayList<>();
+        for (Entity e : entityMgr.getAllEntities()) {
+            EntityState s = new EntityState();
+            s.x = e.getPosition().x;
+            s.y = e.getPosition().y;
+            s.alive = e.isAlive();
+            if (e instanceof Player pl) {
+                s.type = "Player";
+                s.hp = pl.getHp();
+                s.sightRange = pl.getSightRange();
+            } else if (e instanceof Enemy enemy) {
+                s.type = "Enemy";
+                s.hp = enemy.getHp();
+                s.sightRange = enemy.getSightRange();
+            }
+            states.add(s);
+        }
+        data.extraData.put("entityStates", (java.io.Serializable) states);
+
         SaveLoadManager.save(data);
         Logger.info("Game saved successfully.");
     }
 
     /**
      * 从文件加载游戏状态并重建世界。
-     * 世界由 seed 确定性重建，玩家位置从存档恢复。
+     * 优先从 extraData.entityStates 恢复实体（含 HP、存货状态），
+     * 若旧存档无此字段则 fallback 到 seed 确定性重建。
      * @return 加载成功返回 true，失败返回 false
      */
     private boolean loadGameState() {
@@ -366,12 +391,31 @@ public class Game {
         }
 
         world = generateWorld(data.seed);
-        player = spawnPlayerAt(data.playerX, data.playerY);
-        entities = new ArrayList<>();
-        entities.add(player);
-        Enemy enemy = spawnEnemy(data.seed);
-        entities.add(enemy);
-        enemies.add(enemy);
+        entityMgr = new EntityManager();
+
+        @SuppressWarnings("unchecked")
+        List<EntityState> states = (List<EntityState>) data.extraData.get("entityStates");
+        if (states != null) {
+            for (EntityState s : states) {
+                Entity e;
+                if ("Player".equals(s.type)) {
+                    player = new Player(new Position(s.x, s.y), s.hp, s.sightRange);
+                    e = player;
+                } else if ("Enemy".equals(s.type)) {
+                    Random random = new Random(data.seed.hashCode());
+                    Enemy enemy = new Enemy(new Position(s.x, s.y), Tileset.ENEMY,
+                            s.hp, s.sightRange, 5, random);
+                    e = enemy;
+                } else {
+                    continue;
+                }
+                if (!s.alive) {
+                    e.die();
+                }
+                addEntity(e);
+            }
+        }
+
         Logger.info("Game loaded successfully.");
         return true;
     }

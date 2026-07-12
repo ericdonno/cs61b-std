@@ -12,6 +12,7 @@ import static byog.Core.RandomUtils.uniform;
 public abstract class Entity {
     protected Position position;
     protected TETile tile;
+    protected boolean alive = true;
 
     public Entity(Position position, TETile tile) {
         this.position = position;
@@ -34,10 +35,19 @@ public abstract class Entity {
         this.tile = tile;
     }
 
+    public boolean isAlive() {
+        return alive;
+    }
+
+    /** 标记实体为死亡状态，待下一帧清理 */
+    public void die() {
+        this.alive = false;
+    }
+
     /**
-     * 判断实体是否可以移动到指定位置（只能站在地板上）
+     * 判断指定位置是否为实体可站立的合法地面（不能是墙或虚空）。
      */
-    public static boolean canMoveTo(Position p, TETile[][] world) {
+    public static boolean canStandOn(Position p, TETile[][] world) {
         if (p.x < 0 || p.x >= world.length || p.y < 0 || p.y >= world[0].length) {
             return false;
         }
@@ -56,7 +66,7 @@ public abstract class Entity {
         final Random random = new Random(seed.hashCode());
 
         int xPos, yPos;
-        while (!canMoveTo(entity.position, world)) {
+        while (!canStandOn(entity.position, world)) {
             xPos = uniform(random, world.length);
             yPos = uniform(random, world[0].length);
             entity.position = new Position(xPos, yPos);

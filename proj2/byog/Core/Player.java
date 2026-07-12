@@ -4,25 +4,44 @@ import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
 import byog.lab5.Position;
 
-import java.util.function.Predicate;
-
 public class Player extends Entity {
+    private int hp;
+    private int sightRange;
 
     public Player() {
-        super(new Position(0, 0), Tileset.PLAYER);
+        this(new Position(0, 0), 100, 10);
     }
 
     public Player(Position position) {
+        this(position, 100, 10);
+    }
+
+    public Player(Position position, int hp, int sightRange) {
         super(position, Tileset.PLAYER);
+        this.hp = hp;
+        this.sightRange = sightRange;
+    }
+
+    public int getHp() {
+        return hp;
+    }
+
+    public void setHp(int hp) {
+        this.hp = hp;
+    }
+
+    public int getSightRange() {
+        return sightRange;
     }
 
     /**
-     * move a player in certain world
+     * 通过 EntityManager 统一检测碰撞，尝试沿指定方向移动玩家。
      */
-    public void move(Direction direction, Predicate<Position> isPlayerColliding) {
+    public void move(Direction direction, TETile[][] world, EntityManager entityMgr) {
         Position newPos = getNewPosition(direction);
-        if (!isPlayerColliding.test(newPos)) {
+        if (entityMgr.canMoveTo(this, newPos, world)) {
             this.position = newPos;
+            entityMgr.claimPosition(newPos);
         }
     }
 
@@ -49,10 +68,10 @@ public class Player extends Entity {
     }
 
     /**
-     * player can only stand on floors
+     * 判断玩家能否站立在指定位置（不能是墙或虚空）。
      */
-    public static boolean canMoveTo(Position p, TETile[][] world) {
-        return Entity.canMoveTo(p, world);
+    public static boolean canStandOn(Position p, TETile[][] world) {
+        return Entity.canStandOn(p, world);
     }
 
     /**
