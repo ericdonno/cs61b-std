@@ -30,8 +30,8 @@ public class EnemyCollisionTest {
 
         // 5. 运行 500 帧，每帧检查碰撞
         for (int tick = 0; tick < 500; tick++) {
-            e1.updateAI(world, em);
-            e2.updateAI(world, em);
+            e1.updateAI(world, em, player);
+            e2.updateAI(world, em, player);
 
             Position pPlayer = player.getPosition();
             Position pE1 = e1.getPosition();

@@ -7,6 +7,7 @@ import byog.TileEngine.Tileset;
 import byog.lab5.Position;
 import edu.princeton.cs.introcs.StdDraw;
 
+import java.awt.Color;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -17,6 +18,8 @@ public class Game {
     TERenderer ter = new TERenderer();
     public static final int WIDTH = 80;
     public static final int HEIGHT = 30;
+    public static final int UI_HEIGHT = 2;
+    public static final int WINDOW_HEIGHT = HEIGHT + UI_HEIGHT;
 
     private TETile[][] world;
     private Player player;
@@ -26,15 +29,24 @@ public class Game {
 
     // 游戏状态枚举
     private enum GameState {
-        MENU, SEED_INPUT, PLAYING, QUIT_PENDING, QUIT
+        MENU, SEED_INPUT, PLAYING, PAUSED, QUIT_PENDING, QUIT
     }
+
+    // 暂停按钮常量（位于顶部 UI 栏内）
+    private static final double BTN_CENTER_X = 76.0;
+    private static final double BTN_CENTER_Y = HEIGHT + UI_HEIGHT / 2.0;
+    private static final double BTN_HALF_W = 3.5;
+    private static final double BTN_HALF_H = 0.75;
+
+    // 鼠标边沿检测
+    private boolean mouseWasPressed = false;
 
     /**
      * Method used for playing a fresh game. The game should start from the main menu.
      */
     public void playWithKeyboard() {
         // 初始化
-        ter.initialize(WIDTH, HEIGHT);
+        ter.initialize(WIDTH, WINDOW_HEIGHT);
         entityMgr = new EntityManager();
         player = null;
         initKeyBindings();
@@ -45,17 +57,32 @@ public class Game {
 
         // 主循环
         while (currentState != GameState.QUIT) {
-            // 处理输入
+            // 处理键盘输入
             if (StdDraw.hasNextKeyTyped()) {
                 char c = Character.toLowerCase(StdDraw.nextKeyTyped());
                 currentState = processInput(currentState, c, seedStr);
             }
 
+            // 处理鼠标点击暂停按钮（边沿检测）
+            boolean mousePressed = StdDraw.isMousePressed();
+            if (mousePressed && !mouseWasPressed) {
+                double mx = StdDraw.mouseX();
+                double my = StdDraw.mouseY();
+                if (isInsidePauseButton(mx, my)) {
+                    if (currentState == GameState.PLAYING) {
+                        currentState = GameState.PAUSED;
+                    } else if (currentState == GameState.PAUSED) {
+                        currentState = GameState.PLAYING;
+                    }
+                }
+            }
+            mouseWasPressed = mousePressed;
+
             // Enemies AI tick
             if (currentState == GameState.PLAYING) {
                 for (Entity e : entityMgr.getAllEntities()) {
                     if (e instanceof Enemy enemy && e.isAlive()) {
-                        enemy.updateAI(world, entityMgr);
+                        enemy.updateAI(world, entityMgr, player);
                     }
                 }
                 entityMgr.flushPendingChanges();
@@ -127,8 +154,18 @@ public class Game {
             case PLAYING:
                 if (c == ':') {
                     return GameState.QUIT_PENDING;
+                } else if (c == 'p') {
+                    return GameState.PAUSED;
                 } else {
                     handlePlayerInput(c);
+                }
+                return state;
+
+            case PAUSED:
+                if (c == 'p') {
+                    return GameState.PLAYING;
+                } else if (c == ':') {
+                    return GameState.QUIT_PENDING;
                 }
                 return state;
 
@@ -158,8 +195,9 @@ public class Game {
                 drawSeedInput(seed);
                 break;
             case PLAYING:
+            case PAUSED:
             case QUIT_PENDING:
-                ter.renderFrame(buildActiveFrame());
+                drawGameWithPauseButton(state == GameState.PAUSED);
                 break;
             default:
                 break;
@@ -187,6 +225,52 @@ public class Game {
         StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 + 2, "Enter seed number:");
         StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0, seed.isEmpty() ? "" : seed);
         StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 - 2, "Press 'S' to start");
+    }
+
+    /**
+     * 绘制游戏画面和暂停按钮。
+     * @param isPaused true 时显示 Resume 按钮，false 时显示 Pause 按钮
+     */
+    private void drawGameWithPauseButton(boolean isPaused) {
+        TETile[][] frame = buildActiveFrame();
+        StdDraw.clear(new Color(0, 0, 0));
+        for (int x = 0; x < frame.length; x++) {
+            for (int y = 0; y < frame[0].length; y++) {
+                frame[x][y].draw(x, y);
+            }
+        }
+        drawUIBar(isPaused);
+        StdDraw.show();
+    }
+
+    /** 绘制顶部 UI 栏（深灰背景 + 分隔线 + 暂停按钮）。 */
+    private void drawUIBar(boolean isPaused) {
+        double barY = HEIGHT + UI_HEIGHT / 2.0;
+        // 背景
+        StdDraw.setPenColor(new Color(30, 30, 30));
+        StdDraw.filledRectangle(WIDTH / 2.0, barY, WIDTH / 2.0, UI_HEIGHT / 2.0);
+        // 分隔线
+        StdDraw.setPenColor(new Color(100, 100, 100));
+        StdDraw.line(0, HEIGHT, WIDTH, HEIGHT);
+        // 暂停按钮
+        drawPauseButton(isPaused);
+    }
+
+    /** 在 UI 栏内绘制暂停/恢复按钮。 */
+    private void drawPauseButton(boolean isPaused) {
+        StdDraw.setPenColor(isPaused ? new Color(60, 120, 60) : new Color(80, 80, 80));
+        StdDraw.filledRectangle(BTN_CENTER_X, BTN_CENTER_Y, BTN_HALF_W, BTN_HALF_H);
+        StdDraw.setPenColor(StdDraw.WHITE);
+        StdDraw.rectangle(BTN_CENTER_X, BTN_CENTER_Y, BTN_HALF_W, BTN_HALF_H);
+        StdDraw.text(BTN_CENTER_X, BTN_CENTER_Y, isPaused ? "|> Resume (P)" : "|| Pause (P)");
+    }
+
+    /** 判断鼠标坐标是否在暂停按钮区域内。 */
+    private boolean isInsidePauseButton(double mouseX, double mouseY) {
+        return mouseX >= BTN_CENTER_X - BTN_HALF_W
+            && mouseX <= BTN_CENTER_X + BTN_HALF_W
+            && mouseY >= BTN_CENTER_Y - BTN_HALF_H
+            && mouseY <= BTN_CENTER_Y + BTN_HALF_H;
     }
 
 
@@ -232,7 +316,7 @@ public class Game {
 
         // To draw, for tests, comment this when testing "Survivals" or publishing
         TERenderer ter = new TERenderer();
-        ter.initialize(WIDTH, HEIGHT);
+        ter.initialize(WIDTH, WINDOW_HEIGHT);
         ter.renderFrame(frame);
 
         return frame;

@@ -1,5 +1,7 @@
 package byog.Core;
 
+import byog.Helper.Logger;
+import byog.Helper.MathHelper;
 import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
 import byog.lab5.Position;
@@ -11,14 +13,16 @@ import java.util.Random;
 public class Enemy extends Entity {
     private static final int MAX_RETRY = 4;
     private ActionQueue actionQueue;
+    private EnemyBrain brain;
     private int hp;
     private int sightRange;
     private Random random;
     private int moveInterval;
     private int tickCounter;
+    private StrategicIntent.Strategy currentStrategy;
 
     public Enemy(Position position, Random random) {
-        this(position, Tileset.ENEMY, 10, 7, 5, random);
+        this(position, Tileset.ENEMY, 10, 7, 8, random);
     }
 
     public Enemy(Position position, TETile tile, int hp, int sightRange, int moveInterval, Random random) {
@@ -29,40 +33,50 @@ public class Enemy extends Entity {
         this.tickCounter = 0;
         this.random = random;
         this.actionQueue = new ActionQueue();
+        this.brain = new RuleBasedBrain(sightRange, random);
     }
 
     /**
-     * 随机选择一个方向。
-     * @return 随机方向
-     */
-    private Direction randomDirection() {
-        Direction[] directions = Direction.values();
-        int index = random.nextInt(directions.length);
-        return directions[index];
-    }
-
-    /**
-     * 更新敌人 AI 状态。从动作队列取动作执行，被阻挡时立即补充并重试。
+     * 更新敌人 AI 状态。Brain 决策 → Planner 翻译 → 动作队列消费。
      * @param world 游戏世界瓦片数组
      * @param entityMgr 实体管理器，用于碰撞检测和空间索引
+     * @param player 玩家，用于构建快照供 Brain 决策
      */
-    public void updateAI(TETile[][] world, EntityManager entityMgr) {
+    public void updateAI(TETile[][] world, EntityManager entityMgr, Player player) {
         tickCounter++;
         if (tickCounter >= moveInterval) {
             tickCounter = 0;
-            if (actionQueue.needRefill()) {
-                actionQueue.enqueue(new MoveAction(randomDirection(), entityMgr));
+
+            // 每 动作tick 评估当前局势
+            GameStateSnapshot snapshot = new GameStateSnapshot(world,
+                    player.getPosition(), this.getPosition(), this.getId());
+            StrategicIntent intent = brain.think(snapshot);
+            StrategicIntent.Strategy newStrategy = intent.getStrategy();
+
+            // 策略切换 → 立即清空旧队列，重新规划
+            if (newStrategy != currentStrategy) {
+                Logger.info("Enemy#%d Strategy: %s → %s",
+                        this.getId(), currentStrategy, newStrategy);
+                actionQueue.clear();
+                currentStrategy = newStrategy;
+                List<Action> actions = ClassicalPlanner.translate(intent,
+                        this.getPosition(), this.getId(), world, entityMgr, random);
+                actionQueue.enqueueAll(actions);
+            } else if (actionQueue.needRefill()) {
+                // 同策略续补
+                List<Action> actions = ClassicalPlanner.translate(intent,
+                        this.getPosition(), this.getId(), world, entityMgr, random);
+                actionQueue.enqueueAll(actions);
             }
+
             for (int i = 0; i < MAX_RETRY; i++) {
                 Action action = actionQueue.poll();
                 if (action == null) {
                     break;
                 }
+                // 行动
                 if (action.execute(world, this) == Action.ActionResult.SUCCESS) {
                     break;
-                }
-                if (actionQueue.needRefill()) {
-                    actionQueue.enqueue(new MoveAction(randomDirection(), entityMgr));     // 目前的简单闲逛逻辑
                 }
             }
         }
@@ -97,16 +111,12 @@ public class Enemy extends Entity {
             Enemy enemy = new Enemy(new Position(0, 0), random);
             Entity.initEntity(enemy, world, seed + "_pos_" + i);
 
-            while (distance(enemy.getPosition(), playerPos) < 5) {
+            while (MathHelper.manhattanDistance(enemy.getPosition(), playerPos) < 5) {
                 Entity.initEntity(enemy, world, seed + "_pos_" + i + "_retry");
             }
 
             enemies.add(enemy);
         }
         return enemies;
-    }
-
-    private static int distance(Position p1, Position p2) {
-        return Math.abs(p1.x - p2.x) + Math.abs(p1.y - p2.y);
     }
 }

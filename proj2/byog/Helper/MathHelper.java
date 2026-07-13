@@ -1,5 +1,6 @@
 package byog.Helper;
 
+import byog.lab5.Position;
 import java.util.*;
 
 import static byog.Core.RandomUtils.poisson;
@@ -15,6 +16,16 @@ public class MathHelper {
         java.util.Arrays.sort(numbers);
         // 返回第二小和第二大的数
         return new int[] {numbers[1], numbers[2]};
+    }
+
+    /**
+     * 计算两个位置之间的曼哈顿距离
+     * @param a 位置a
+     * @param b 位置b
+     * @return 曼哈顿距离 |x1-x2| + |y1-y2|
+     */
+    public static int manhattanDistance(Position a, Position b) {
+        return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
     }
 
     /**

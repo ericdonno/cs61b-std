@@ -10,6 +10,8 @@ import java.util.Random;
 import static byog.Core.RandomUtils.uniform;
 
 public abstract class Entity {
+    private static int nextId = 0;
+    protected final int id = nextId++;
     protected Position position;
     protected TETile tile;
     protected boolean alive = true;
@@ -33,6 +35,10 @@ public abstract class Entity {
 
     public void setTile(TETile tile) {
         this.tile = tile;
+    }
+
+    public int getId() {
+        return id;
     }
 
     public boolean isAlive() {
