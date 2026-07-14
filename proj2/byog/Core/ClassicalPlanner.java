@@ -55,6 +55,14 @@ public class ClassicalPlanner {
             }
         } else if (strategy == StrategicIntent.Strategy.GUARD) {
             actions.add(new MoveAction(null, entityMgr));
+        } else if (strategy == StrategicIntent.Strategy.ATTACK) {
+            Direction attackDir = Direction.fromDelta(
+                    targetPos.x - enemyPos.x, targetPos.y - enemyPos.y);
+            if (attackDir != null) {
+                actions.add(new AttackAction(entityMgr, attackDir, random));
+            } else {
+                actions.add(new MoveAction(null, entityMgr));
+            }
         }
 
         Logger.debug("Enemy#%d ClassicalPlanner: pathLength=%d, strategy=%s, actions=%d",

@@ -67,6 +67,11 @@ public class EntityManager {
         return positionIndex.values();
     }
 
+    /** 根据位置查找实体。 */
+    public Entity findEntityAt(Position pos) {
+        return positionIndex.get(pos);
+    }
+
     /** 请求在帧末添加实体。 */
     public void requestAddEntity(Entity e) {
         pendingAdd.add(e);

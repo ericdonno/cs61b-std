@@ -7,6 +7,14 @@ import byog.lab5.Position;
 public class Player extends Entity {
     private int hp;
     private int sightRange;
+    private int attackDamage = 15;
+    private int damageVariance = 5;
+
+    private int charge = 0;
+    private int maxCharge = 100;
+    private int chargeRate = 2;
+
+    private int hitTimer = 0;
 
     public Player() {
         this(new Position(0, 0), 100, 10);
@@ -32,6 +40,59 @@ public class Player extends Entity {
 
     public int getSightRange() {
         return sightRange;
+    }
+
+    public int getAttackDamage() {
+        return attackDamage;
+    }
+
+    public int getDamageVariance() {
+        return damageVariance;
+    }
+
+    /** 每帧更新蓄力 */
+    public void updateCharge() {
+        if (isAlive()) {
+            charge = Math.min(maxCharge, charge + chargeRate);
+        }
+    }
+
+    /** 判断是否可以攻击 */
+    public boolean canAttack() {
+        return charge >= maxCharge;
+    }
+
+    /** 释放攻击，重置蓄力 */
+    public void resetCharge() {
+        charge = 0;
+    }
+
+    public int getCharge() {
+        return charge;
+    }
+
+    public int getMaxCharge() {
+        return maxCharge;
+    }
+
+    /** 设置受击状态，持续 N 帧 */
+    public void setHitTimer(int frames) {
+        this.hitTimer = frames;
+    }
+
+    /** 每帧更新受击状态 */
+    public void updateHitTimer() {
+        if (hitTimer > 0) {
+            hitTimer--;
+        }
+    }
+
+    /** 获取当前显示的瓦片（受击时返回红色） */
+    public TETile getDisplayTile() {
+        if (hitTimer > 0) {
+            return Tileset.PLAYER_HIT;
+        }
+        return getTile();
     }
 
     /**

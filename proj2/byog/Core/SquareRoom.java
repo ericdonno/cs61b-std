@@ -82,4 +82,15 @@ public class SquareRoom implements Room{
     public String getShape() {
         return shape;
     }
+
+    /** 返回房间内部所有地板坐标（不包含墙壁边框）。 */
+    public java.util.List<Position> getFloorPositions() {
+        java.util.List<Position> floors = new java.util.ArrayList<>();
+        for (int x = position.x + 1; x < position.x + size - 1; x++) {
+            for (int y = position.y + 1; y < position.y + size - 1; y++) {
+                floors.add(new Position(x, y));
+            }
+        }
+        return floors;
+    }
 }

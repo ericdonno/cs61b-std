@@ -1,10 +1,16 @@
 package byog.Core;
 
+import byog.Helper.Logger;
 import byog.Helper.MatrixGraph;
+import byog.lab5.Position;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.Queue;
 import java.util.Set;
 
 
@@ -65,6 +71,87 @@ public class RoomGraph {
 
         // 返回结果
         return new List[]{mstHall, otherHall};
+    }
+
+    /**
+     * 在 MST 拓扑树上计算从 fromPos 所在房间出发，图距离最远的房间。
+     * 若 fromPos 不在任何房间内，fallback 到离 fromPos 最近的房间。
+     */
+    public Room findFarthestRoom(Position fromPos, List<SquareRoom> rooms) {
+        // 1. 找到 fromPos 所在的房间
+        Room startRoom = null;
+        double minDist = Double.POSITIVE_INFINITY;
+        for (SquareRoom r : rooms) {
+            if (containsPosition(r, fromPos)) {
+                startRoom = r;
+                break;
+            }
+            double d = Math.abs(fromPos.x - r.getPosition().x)
+                     + Math.abs(fromPos.y - r.getPosition().y);
+            if (d < minDist) {
+                minDist = d;
+                startRoom = r;
+            }
+        }
+
+        if (startRoom == null || rooms.isEmpty()) {
+            return null;
+        }
+
+        // 2. 获取 MST 边
+        List<MatrixGraph.Edge<Room>> mstEdges = graph.getMinimumSpanningTree(firstRoom);
+
+        // 3. 在 MST 上构建邻接表
+        Map<Room, List<MatrixGraph.Edge<Room>>> adj = new HashMap<>();
+        for (MatrixGraph.Edge<Room> e : mstEdges) {
+            adj.computeIfAbsent(e.from, k -> new ArrayList<>()).add(e);
+            adj.computeIfAbsent(e.to, k -> new ArrayList<>()).add(
+                    new MatrixGraph.Edge<>(e.to, e.from, e.weight));
+        }
+
+        // 4. BFS 计算从 startRoom 到各房间的图距离
+        Map<Room, Double> distances = new HashMap<>();
+        Queue<Room> queue = new LinkedList<>();
+        Set<Room> visited = new HashSet<>();
+        queue.add(startRoom);
+        visited.add(startRoom);
+        distances.put(startRoom, 0.0);
+
+        while (!queue.isEmpty()) {
+            Room current = queue.poll();
+            double curDist = distances.get(current);
+            List<MatrixGraph.Edge<Room>> neighbors = adj.get(current);
+            if (neighbors == null) continue;
+            for (MatrixGraph.Edge<Room> e : neighbors) {
+                Room neighbor = e.to;
+                if (!visited.contains(neighbor)) {
+                    visited.add(neighbor);
+                    distances.put(neighbor, curDist + e.weight);
+                    queue.add(neighbor);
+                }
+            }
+        }
+
+        // 5. 找出距离最大的房间
+        Room farthest = startRoom;
+        double maxDist = 0;
+        for (Map.Entry<Room, Double> entry : distances.entrySet()) {
+            if (entry.getValue() > maxDist) {
+                maxDist = entry.getValue();
+                farthest = entry.getKey();
+            }
+        }
+
+        Logger.info("Farthest room from %s: distance=%.2f", fromPos, maxDist);
+        return farthest;
+    }
+
+    /** 判断坐标是否在房间内（包含墙壁边框）。 */
+    private static boolean containsPosition(SquareRoom room, Position pos) {
+        int rx = room.getPosition().x;
+        int ry = room.getPosition().y;
+        int sz = room.getSize();
+        return pos.x >= rx && pos.x < rx + sz && pos.y >= ry && pos.y < ry + sz;
     }
 
     private Hall edgeToHall(MatrixGraph.Edge<Room> edge) {

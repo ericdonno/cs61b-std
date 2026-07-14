@@ -34,7 +34,12 @@ public class RuleBasedBrain implements EnemyBrain {
 
         int dist = MathHelper.manhattanDistance(enemyPos, playerPos);
 
-        if (dist <= sightRange) {
+        if (dist == 1) {
+            Logger.debug("Enemy#%d RuleBasedBrain: dist=%d → ATTACK",
+                    state.getEnemyId(), dist);
+            return new StrategicIntent(StrategicIntent.Goal.ATTACK_PLAYER,
+                    StrategicIntent.Strategy.ATTACK, playerPos);
+        } else if (dist <= sightRange) {
             Logger.debug("Enemy#%d RuleBasedBrain: dist=%d <= sightRange=%d → CHASE",
                     state.getEnemyId(), dist, sightRange);
             return new StrategicIntent(StrategicIntent.Goal.CHASE,

@@ -8,6 +8,7 @@ import byog.lab5.Position;
 import edu.princeton.cs.introcs.StdDraw;
 
 import java.awt.Color;
+import java.awt.Font;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -18,7 +19,7 @@ public class Game {
     TERenderer ter = new TERenderer();
     public static final int WIDTH = 80;
     public static final int HEIGHT = 30;
-    public static final int UI_HEIGHT = 2;
+    public static final int UI_HEIGHT = 3;
     public static final int WINDOW_HEIGHT = HEIGHT + UI_HEIGHT;
 
     private TETile[][] world;
@@ -26,6 +27,10 @@ public class Game {
     private EntityManager entityMgr;
     private Map<Character, Runnable> keyBindings;
     private String seed;
+
+    private long frameCounter = 0;
+    private long attackFrame = -1;
+    private int floorLevel = 1;
 
     // 游戏状态枚举
     private enum GameState {
@@ -57,6 +62,8 @@ public class Game {
 
         // 主循环
         while (currentState != GameState.QUIT) {
+            frameCounter++;
+
             // 处理键盘输入
             if (StdDraw.hasNextKeyTyped()) {
                 char c = Character.toLowerCase(StdDraw.nextKeyTyped());
@@ -78,8 +85,14 @@ public class Game {
             }
             mouseWasPressed = mousePressed;
 
-            // Enemies AI tick
             if (currentState == GameState.PLAYING) {
+                // 更新玩家蓄力
+                if (player != null) {
+                    player.updateCharge();
+                    player.updateHitTimer();
+                }
+
+                // Enemies AI tick
                 for (Entity e : entityMgr.getAllEntities()) {
                     if (e instanceof Enemy enemy && e.isAlive()) {
                         enemy.updateAI(world, entityMgr, player);
@@ -87,6 +100,12 @@ public class Game {
                 }
                 entityMgr.flushPendingChanges();
                 entityMgr.removeDeadEntities();
+
+                // 检测玩家死亡
+                if (player != null && !player.isAlive()) {
+                    currentState = GameState.PAUSED;
+                    Logger.info("Player died!");
+                }
             }
 
             // 绘制
@@ -134,15 +153,14 @@ public class Game {
                 if (Character.isDigit(c)) {
                     seedStr.append(c);
                 } else if (c == 's') {
-                    world = generateWorld(seedStr.toString());
-                    // 添加玩家
-                    player = spawnPlayer(this.seed);
+                    WorldGenResult result = generateWorld(seedStr.toString(), floorLevel);
+                    player = spawnPlayer(this.seed, floorLevel);
                     addEntity(player);
-                    // 添加敌人
-                    List<Enemy> enemies = Enemy.spawnEnemies(world, this.seed, player.getPosition());
+                    List<Enemy> enemies = Enemy.spawnEnemies(world, this.seed, player.getPosition(), floorLevel - 1);
                     for (Enemy e : enemies) {
                         addEntity(e);
                     }
+                    placeStairs(result, player.getPosition(), floorLevel);
 
                     Logger.section("Game started (new game).");
                     return GameState.PLAYING;
@@ -243,7 +261,7 @@ public class Game {
         StdDraw.show();
     }
 
-    /** 绘制顶部 UI 栏（深灰背景 + 分隔线 + 暂停按钮）。 */
+    /** 绘制顶部 UI 栏（深灰背景 + 分隔线 + 暂停按钮 + HP 显示 + 蓄力条）。 */
     private void drawUIBar(boolean isPaused) {
         double barY = HEIGHT + UI_HEIGHT / 2.0;
         // 背景
@@ -252,6 +270,41 @@ public class Game {
         // 分隔线
         StdDraw.setPenColor(new Color(100, 100, 100));
         StdDraw.line(0, HEIGHT, WIDTH, HEIGHT);
+
+        // HP 显示
+        if (player != null) {
+            StdDraw.setPenColor(StdDraw.WHITE);
+            StdDraw.text(5, barY, String.format("HP: %d/100", player.getHp()));
+
+            int enemyCount = 0;
+            for (Entity e : entityMgr.getAllEntities()) {
+                if (e instanceof Enemy && e.isAlive()) {
+                    enemyCount++;
+                }
+            }
+            StdDraw.text(18, barY, String.format("Enemies: %d", enemyCount));
+
+            // 楼层显示（居中）
+            StdDraw.setPenColor(new Color(200, 200, 100));
+            StdDraw.setFont(new Font("Monaco", Font.BOLD, 20));
+            StdDraw.text(38, barY, String.format("FLOOR: %d", floorLevel));
+            StdDraw.setFont(new Font("Monaco", Font.BOLD, 14));
+
+            // 蓄力条显示
+            double chargePercent = (double) player.getCharge() / player.getMaxCharge();
+            StdDraw.setPenColor(new Color(50, 50, 50));
+            StdDraw.filledRectangle(58, barY, 10, 0.3);
+            if (player.canAttack()) {
+                StdDraw.setPenColor(StdDraw.GREEN);
+            } else {
+                StdDraw.setPenColor(StdDraw.BLUE);
+            }
+            StdDraw.filledRectangle(58 - 10 + chargePercent * 10, barY, chargePercent * 10, 0.3);
+            StdDraw.setPenColor(StdDraw.WHITE);
+            StdDraw.rectangle(58, barY, 10, 0.3);
+            StdDraw.text(58, barY + 0.6, "CHARGE");
+        }
+
         // 暂停按钮
         drawPauseButton(isPaused);
     }
@@ -342,10 +395,33 @@ public class Game {
         keyBindings.put('s', () -> movePlayer(player, Direction.DOWN));
         keyBindings.put('a', () -> movePlayer(player, Direction.LEFT));
         keyBindings.put('d', () -> movePlayer(player, Direction.RIGHT));
+
+        // 2. 攻击动作（空格键蓄力攻击）
+        keyBindings.put(' ', () -> attackPlayer());
     }
 
     private void movePlayer(Player player, Direction direction) {
+        Position oldPos = player.getPosition();
         player.move(direction, world, entityMgr);
+        if (!player.getPosition().equals(oldPos)) {
+            Position newPos = player.getPosition();
+            if (world[newPos.x][newPos.y] == Tileset.STAIRS) {
+                nextFloor();
+            }
+        }
+    }
+
+    private void attackPlayer() {
+        if (player == null || !player.isAlive()) {
+            return;
+        }
+        if (!player.canAttack()) {
+            Logger.info("Charge not ready! (%d/%d)", player.getCharge(), player.getMaxCharge());
+            return;
+        }
+        AttackAction action = new AttackAction(entityMgr, new Random(seed.hashCode()));
+        action.execute(world, player);
+        attackFrame = frameCounter;
     }
 
     /**
@@ -357,13 +433,27 @@ public class Game {
         }
         TETile[][] frame = TETile.copyOf(world);
         Position p = player.getPosition();
-        frame[p.x][p.y] = player.getTile();
+        frame[p.x][p.y] = player.getDisplayTile();
         for (Entity e : entityMgr.getAllEntities()) {
             if (e != player && e.isAlive()) {
                 Position ep = e.getPosition();
                 frame[ep.x][ep.y] = e.getTile();
             }
         }
+
+        // 攻击动画：周围8格替换为橙色闪光瓦片，持续8帧
+        if (attackFrame >= 0 && frameCounter - attackFrame < 8) {
+            int[] dx = {-1, 0, 1, -1, 1, -1, 0, 1};
+            int[] dy = {-1, -1, -1, 0, 0, 1, 1, 1};
+            for (int i = 0; i < 8; i++) {
+                int nx = p.x + dx[i];
+                int ny = p.y + dy[i];
+                if (nx >= 0 && nx < frame.length && ny >= 0 && ny < frame[0].length) {
+                    frame[nx][ny] = Tileset.ATTACK_FLASH;
+                }
+            }
+        }
+
         return frame;
     }
 
@@ -383,12 +473,15 @@ public class Game {
     }
 
     /**
-     * 用 seed 生成世界并记录到 seed 字段。
-     * @return 生成后的 TETile[][]
+     * 用 seed 生成指定楼层的地牢世界。
+     * @return 生成结果（含世界地图和房间列表）
      */
-    private TETile[][] generateWorld(String seed) {
+    private WorldGenResult generateWorld(String seed, int floor) {
         this.seed = seed;
-        return WorldGenerator.RandomSquareRoomWrd(createEmptyWorld(), seed);
+        String floorSeed = seed + "_F" + floor;
+        WorldGenResult result = WorldGenerator.RandomSquareRoomWrd(createEmptyWorld(), floorSeed);
+        world = result.getWorld();
+        return result;
     }
 
     private TETile[][] createEmptyWorld() {
@@ -403,13 +496,13 @@ public class Game {
 
     /**
      * 在世界中随机放置玩家（用于新游戏）。
-     * 注意：唯一的player对象在此方法中创建
      * @param seed 用于随机放置的种子
+     * @param floor 当前楼层
      * @return 创建的 Player 对象
      */
-    private Player spawnPlayer(String seed) {
+    private Player spawnPlayer(String seed, int floor) {
         Player p = new Player();
-        Player.initPlayer(p, world, seed);
+        Player.initPlayer(p, world, seed + "_F" + floor);
         return p;
     }
 
@@ -421,6 +514,45 @@ public class Game {
      */
     private Player spawnPlayerAt(int x, int y) {
         return new Player(new Position(x, y));
+    }
+
+    /** 在当前楼层最远房间放置传送方块。 */
+    private void placeStairs(WorldGenResult result, Position playerPos, int floor) {
+        List<SquareRoom> rooms = result.getRooms();
+        if (rooms.isEmpty()) {
+            return;
+        }
+        Random random = new Random((seed + "_F" + floor + "_stairs").hashCode());
+        RoomGraph roomGraph = new RoomGraph(new ArrayList<>(rooms));
+        Room farthest = roomGraph.findFarthestRoom(playerPos, rooms);
+        if (farthest instanceof SquareRoom sq) {
+            List<Position> floors = sq.getFloorPositions();
+            if (!floors.isEmpty()) {
+                Position stairsPos = floors.get(random.nextInt(floors.size()));
+                world[stairsPos.x][stairsPos.y] = Tileset.STAIRS;
+                Logger.info("Stairs placed at %s (farthest room)", stairsPos);
+            }
+        }
+    }
+
+    /** 进入下一层：楼层+1、重新生成世界、重生玩家和敌人、放置传送门。 */
+    private void nextFloor() {
+        floorLevel++;
+        Logger.section("Entering Floor " + floorLevel);
+
+        WorldGenResult result = generateWorld(this.seed, floorLevel);
+        entityMgr = new EntityManager();
+        player = spawnPlayer(this.seed, floorLevel);
+        addEntity(player);
+
+        List<Enemy> enemies = Enemy.spawnEnemies(world, this.seed, player.getPosition(), floorLevel - 1);
+        for (Enemy e : enemies) {
+            addEntity(e);
+        }
+
+        placeStairs(result, player.getPosition(), floorLevel);
+        frameCounter = 0;
+        attackFrame = -1;
     }
 
     /**
@@ -453,6 +585,7 @@ public class Game {
             states.add(s);
         }
         data.extraData.put("entityStates", (java.io.Serializable) states);
+        data.extraData.put("floorLevel", floorLevel);
 
         SaveLoadManager.save(data);
         Logger.info("Game saved successfully.");
@@ -474,7 +607,11 @@ public class Game {
             return false;
         }
 
-        world = generateWorld(data.seed);
+        // 恢复楼层，旧存档无此字段时默认第1层
+        Integer savedFloor = (Integer) data.extraData.get("floorLevel");
+        floorLevel = (savedFloor != null) ? savedFloor : 1;
+
+        WorldGenResult result = generateWorld(data.seed, floorLevel);
         entityMgr = new EntityManager();
 
         @SuppressWarnings("unchecked")
@@ -498,6 +635,11 @@ public class Game {
                 }
                 addEntity(e);
             }
+        }
+
+        // 放置传送方块（读档后需要重建）
+        if (player != null) {
+            placeStairs(result, player.getPosition(), floorLevel);
         }
 
         Logger.info("Game loaded successfully.");

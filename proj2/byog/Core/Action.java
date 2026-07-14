@@ -4,7 +4,7 @@ import byog.TileEngine.TETile;
 
 public interface Action {
     enum ActionResult {
-        SUCCESS, BLOCKED, INTERRUPTED, COMPLETED
+        SUCCESS, BLOCKED, INTERRUPTED, COMPLETED, DAMAGE
     }
 
     /**

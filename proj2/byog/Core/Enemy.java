@@ -20,6 +20,8 @@ public class Enemy extends Entity {
     private int moveInterval;
     private int tickCounter;
     private StrategicIntent.Strategy currentStrategy;
+    private int attackDamage = 10;
+    private int damageVariance = 3;
 
     public Enemy(Position position, Random random) {
         this(position, Tileset.ENEMY, 10, 7, 8, random);
@@ -90,6 +92,18 @@ public class Enemy extends Entity {
         return sightRange;
     }
 
+    public int getAttackDamage() {
+        return attackDamage;
+    }
+
+    public int getDamageVariance() {
+        return damageVariance;
+    }
+
+    public void setHp(int hp) {
+        this.hp = hp;
+    }
+
     public ActionQueue getActionQueue() {
         return actionQueue;
     }
@@ -99,12 +113,13 @@ public class Enemy extends Entity {
      * @param world 游戏世界
      * @param seed 种子
      * @param playerPos 玩家位置，用于距离检查
+     * @param extraCount 额外敌人数量（用于层数递增）
      * @return 生成的敌人列表
      */
-    public static List<Enemy> spawnEnemies(TETile[][] world, String seed, Position playerPos) {
+    public static List<Enemy> spawnEnemies(TETile[][] world, String seed, Position playerPos, int extraCount) {
         List<Enemy> enemies = new ArrayList<>();
         Random countRandom = new Random((seed + "_enemy_count").hashCode());
-        int count = 3 + countRandom.nextInt(3);
+        int count = 3 + extraCount + countRandom.nextInt(3);
 
         for (int i = 0; i < count; i++) {
             Random random = new Random((seed + "_enemy_" + i).hashCode());

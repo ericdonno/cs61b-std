@@ -36,6 +36,9 @@ public class Tileset {
     public static final TETile TREE = new TETile('♠', Color.green, Color.black, "tree");
 
     public static final TETile ENEMY = new TETile('E', Color.red, Color.black, "enemy");
+    public static final TETile STAIRS = new TETile('>', Color.green, Color.black, "stairs");
+    public static final TETile PLAYER_HIT = new TETile('@', Color.white, Color.red, "player hit");
+    public static final TETile ATTACK_FLASH = new TETile('*', Color.orange, Color.orange, "attack flash");
 
     /**
      * Except "NOTHING"

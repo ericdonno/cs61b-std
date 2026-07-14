@@ -8,11 +8,11 @@ import byog.lab5.Position;
 public class StrategicIntent {
 
     public enum Goal {
-        INTERCEPT_PLAYER, GUARD, PATROL, CHASE, AMBUSH, RETREAT
+        INTERCEPT_PLAYER, GUARD, PATROL, CHASE, AMBUSH, RETREAT, ATTACK_PLAYER
     }
 
     public enum Strategy {
-        INTERCEPT, AMBUSH, PATROL, GUARD, CHASE
+        INTERCEPT, AMBUSH, PATROL, GUARD, CHASE, ATTACK
     }
 
     private final Goal goal;

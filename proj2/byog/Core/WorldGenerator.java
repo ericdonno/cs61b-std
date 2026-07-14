@@ -12,7 +12,7 @@ import static byog.Core.RandomUtils.biasUniform;
 import static byog.Core.RandomUtils.uniform;
 
 public class WorldGenerator {
-    public static TETile[][] RandomSquareRoomWrd(TETile[][] world, String seed) {
+    public static WorldGenResult RandomSquareRoomWrd(TETile[][] world, String seed) {
         if (seed == null || seed.isEmpty()) {
             seed = String.valueOf(System.currentTimeMillis());
             Logger.info("Seed is empty. Using default seed: %s", seed);
@@ -112,7 +112,7 @@ public class WorldGenerator {
         }
 
 
-        return world;
+        return new WorldGenResult(world, allRoom);
     }
 
     /** Helper */
