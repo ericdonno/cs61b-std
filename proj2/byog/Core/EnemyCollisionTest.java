@@ -23,8 +23,8 @@ public class EnemyCollisionTest {
         em.addEntity(player);
 
         // 4. 两个敌人放在紧邻位置
-        Enemy e1 = new Enemy(new Position(2, 1), new Random(42));
-        Enemy e2 = new Enemy(new Position(1, 2), new Random(99));
+        Enemy e1 = new Enemy(new Position(2, 1), Tileset.ENEMY, 20, 7, 5, 10, 3, new Random(42));
+        Enemy e2 = new Enemy(new Position(1, 2), Tileset.ENEMY, 20, 7, 5, 10, 3, new Random(99));
         em.addEntity(e1);
         em.addEntity(e2);
 

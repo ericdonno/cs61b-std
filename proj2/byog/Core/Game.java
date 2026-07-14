@@ -32,9 +32,12 @@ public class Game {
     private long attackFrame = -1;
     private int floorLevel = 1;
 
+    private Difficulty difficulty;
+    private GameConfig gameConfig;
+
     // 游戏状态枚举
     private enum GameState {
-        MENU, SEED_INPUT, PLAYING, PAUSED, QUIT_PENDING, QUIT
+        MENU, DIFFICULTY_SELECT, SEED_INPUT, PLAYING, PAUSED, QUIT_PENDING, QUIT
     }
 
     // 暂停按钮常量（位于顶部 UI 栏内）
@@ -137,7 +140,7 @@ public class Game {
         switch (state) {
             case MENU:
                 if (c == 'n') {
-                    return GameState.SEED_INPUT;
+                    return GameState.DIFFICULTY_SELECT;
                 } else if (c == 'l') {
                     if (loadGameState()) {
                         Logger.section("Game started (loaded save).");
@@ -149,6 +152,29 @@ public class Game {
                 }
                 return state;
 
+            case DIFFICULTY_SELECT:
+                if (c == '1' || c == 'e') {
+                    difficulty = Difficulty.EASY;
+                    gameConfig = new GameConfig(difficulty);
+                    return GameState.SEED_INPUT;
+                } else if (c == '2' || c == 'b') {
+                    difficulty = Difficulty.BALANCED;
+                    gameConfig = new GameConfig(difficulty);
+                    return GameState.SEED_INPUT;
+                } else if (c == '3' || c == 'h') {
+                    difficulty = Difficulty.HARDCORE;
+                    gameConfig = new GameConfig(difficulty);
+                    return GameState.SEED_INPUT;
+                }
+                // 旧格式兼容：非123字符默认选 BALANCED 并回退到字符处理
+                difficulty = Difficulty.BALANCED;
+                gameConfig = new GameConfig(difficulty);
+                Logger.info("Unknown difficulty key '%c', using BALANCED.", c);
+                if (Character.isDigit(c)) {
+                    seedStr.append(c);
+                }
+                return GameState.SEED_INPUT;
+
             case SEED_INPUT:
                 if (Character.isDigit(c)) {
                     seedStr.append(c);
@@ -156,13 +182,13 @@ public class Game {
                     WorldGenResult result = generateWorld(seedStr.toString(), floorLevel);
                     player = spawnPlayer(this.seed, floorLevel);
                     addEntity(player);
-                    List<Enemy> enemies = Enemy.spawnEnemies(world, this.seed, player.getPosition(), floorLevel - 1);
+                    List<Enemy> enemies = Enemy.spawnEnemies(world, this.seed, player.getPosition(), floorLevel - 1, gameConfig);
                     for (Enemy e : enemies) {
                         addEntity(e);
                     }
                     placeStairs(result, player.getPosition(), floorLevel);
 
-                    Logger.section("Game started (new game).");
+                    Logger.section("Game started (new game) - " + difficulty.getKey() + ".");
                     return GameState.PLAYING;
                 } else {
                     Logger.error("Invalid character in seed input.");
@@ -209,6 +235,9 @@ public class Game {
             case MENU:
                 drawMenu();
                 break;
+            case DIFFICULTY_SELECT:
+                drawDifficultySelect();
+                break;
             case SEED_INPUT:
                 drawSeedInput(seed);
                 break;
@@ -245,6 +274,19 @@ public class Game {
         StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 - 2, "Press 'S' to start");
     }
 
+    /** 绘制难度选择界面 */
+    private void drawDifficultySelect() {
+        StdDraw.clear(StdDraw.BLACK);
+        StdDraw.setPenColor(StdDraw.WHITE);
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 + 3, "Select Difficulty");
+        StdDraw.setPenColor(new Color(100, 200, 100));
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 + 1, "1 - Easy (E)");
+        StdDraw.setPenColor(new Color(200, 200, 100));
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0, "2 - Balanced (B)");
+        StdDraw.setPenColor(new Color(200, 100, 100));
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 - 1, "3 - Hardcore (H)");
+    }
+
     /**
      * 绘制游戏画面和暂停按钮。
      * @param isPaused true 时显示 Resume 按钮，false 时显示 Pause 按钮
@@ -274,7 +316,16 @@ public class Game {
         // HP 显示
         if (player != null) {
             StdDraw.setPenColor(StdDraw.WHITE);
-            StdDraw.text(5, barY, String.format("HP: %d/100", player.getHp()));
+            int maxHp = (gameConfig != null) ? gameConfig.playerHp : 100;
+            StdDraw.text(5, barY, String.format("HP: %d/%d", player.getHp(), maxHp));
+
+            // 难度标签
+            if (difficulty != null) {
+                StdDraw.setPenColor(getDifficultyColor());
+                StdDraw.setFont(new Font("Monaco", Font.BOLD, 14));
+                StdDraw.text(16, barY, difficulty.getKey().toUpperCase());
+                StdDraw.setFont(new Font("Monaco", Font.PLAIN, 14));
+            }
 
             int enemyCount = 0;
             for (Entity e : entityMgr.getAllEntities()) {
@@ -282,7 +333,7 @@ public class Game {
                     enemyCount++;
                 }
             }
-            StdDraw.text(18, barY, String.format("Enemies: %d", enemyCount));
+            StdDraw.text(22, barY, String.format("Enemies: %d", enemyCount));
 
             // 楼层显示（居中）
             StdDraw.setPenColor(new Color(200, 200, 100));
@@ -316,6 +367,10 @@ public class Game {
         StdDraw.setPenColor(StdDraw.WHITE);
         StdDraw.rectangle(BTN_CENTER_X, BTN_CENTER_Y, BTN_HALF_W, BTN_HALF_H);
         StdDraw.text(BTN_CENTER_X, BTN_CENTER_Y, isPaused ? "|> Resume (P)" : "|| Pause (P)");
+    }
+
+    private static Color getDifficultyColor() {
+        return new Color(200, 200, 100);
     }
 
     /** 判断鼠标坐标是否在暂停按钮区域内。 */
@@ -501,7 +556,7 @@ public class Game {
      * @return 创建的 Player 对象
      */
     private Player spawnPlayer(String seed, int floor) {
-        Player p = new Player();
+        Player p = new Player(new Position(0, 0), gameConfig);
         Player.initPlayer(p, world, seed + "_F" + floor);
         return p;
     }
@@ -545,7 +600,7 @@ public class Game {
         player = spawnPlayer(this.seed, floorLevel);
         addEntity(player);
 
-        List<Enemy> enemies = Enemy.spawnEnemies(world, this.seed, player.getPosition(), floorLevel - 1);
+        List<Enemy> enemies = Enemy.spawnEnemies(world, this.seed, player.getPosition(), floorLevel - 1, gameConfig);
         for (Enemy e : enemies) {
             addEntity(e);
         }
@@ -577,15 +632,23 @@ public class Game {
                 s.type = "Player";
                 s.hp = pl.getHp();
                 s.sightRange = pl.getSightRange();
+                s.attackDamage = pl.getAttackDamage();
+                s.damageVariance = pl.getDamageVariance();
+                s.maxCharge = pl.getMaxCharge();
+                s.chargeRate = pl.getChargeRate();
             } else if (e instanceof Enemy enemy) {
                 s.type = "Enemy";
                 s.hp = enemy.getHp();
                 s.sightRange = enemy.getSightRange();
+                s.attackDamage = enemy.getAttackDamage();
+                s.damageVariance = enemy.getDamageVariance();
+                s.moveInterval = enemy.getMoveInterval();
             }
             states.add(s);
         }
         data.extraData.put("entityStates", (java.io.Serializable) states);
         data.extraData.put("floorLevel", floorLevel);
+        data.extraData.put("difficulty", difficulty.getKey());
 
         SaveLoadManager.save(data);
         Logger.info("Game saved successfully.");
@@ -611,6 +674,11 @@ public class Game {
         Integer savedFloor = (Integer) data.extraData.get("floorLevel");
         floorLevel = (savedFloor != null) ? savedFloor : 1;
 
+        // 恢复难度（旧存档无此字段默认 BALANCED）
+        String savedDifficulty = (String) data.extraData.get("difficulty");
+        difficulty = Difficulty.fromKey(savedDifficulty);
+        gameConfig = new GameConfig(difficulty);
+
         WorldGenResult result = generateWorld(data.seed, floorLevel);
         entityMgr = new EntityManager();
 
@@ -621,11 +689,20 @@ public class Game {
                 Entity e;
                 if ("Player".equals(s.type)) {
                     player = new Player(new Position(s.x, s.y), s.hp, s.sightRange);
+                    if (s.attackDamage != 0) {
+                        player.setAttackDamage(s.attackDamage);
+                        player.setDamageVariance(s.damageVariance);
+                        player.setMaxCharge(s.maxCharge);
+                        player.setChargeRate(s.chargeRate);
+                    }
                     e = player;
                 } else if ("Enemy".equals(s.type)) {
                     Random random = new Random(data.seed.hashCode());
+                    int mvInterval = (s.moveInterval != 0) ? s.moveInterval : gameConfig.enemyMoveInterval;
+                    int atk = (s.attackDamage != 0) ? s.attackDamage : gameConfig.enemyAttack;
+                    int atkVariance = (s.damageVariance != 0) ? s.damageVariance : gameConfig.enemyDamageVariance;
                     Enemy enemy = new Enemy(new Position(s.x, s.y), Tileset.ENEMY,
-                            s.hp, s.sightRange, 5, random);
+                            s.hp, s.sightRange, mvInterval, atk, atkVariance, random);
                     e = enemy;
                 } else {
                     continue;

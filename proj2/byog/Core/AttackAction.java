@@ -100,20 +100,17 @@ public class AttackAction implements Action {
         return ActionResult.BLOCKED;
     }
 
-    /** 根据attackDamage和damageVariance计算随机伤害。 */
+    /** 根据实体自身的attackDamage和damageVariance计算随机伤害。 */
     private int calculateDamage(Entity entity) {
-        int baseDamage;
-        int variance;
+        int baseDamage = 5;
+        int variance = 2;
 
-        if (entity instanceof Player) {
-            baseDamage = 15;
-            variance = 5;
-        } else if (entity instanceof Enemy) {
-            baseDamage = 10;
-            variance = 3;
-        } else {
-            baseDamage = 5;
-            variance = 2;
+        if (entity instanceof Player player) {
+            baseDamage = player.getAttackDamage();
+            variance = player.getDamageVariance();
+        } else if (entity instanceof Enemy enemy) {
+            baseDamage = enemy.getAttackDamage();
+            variance = enemy.getDamageVariance();
         }
 
         return baseDamage + uniform(random, variance + 1);

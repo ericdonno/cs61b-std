@@ -20,18 +20,17 @@ public class Enemy extends Entity {
     private int moveInterval;
     private int tickCounter;
     private StrategicIntent.Strategy currentStrategy;
-    private int attackDamage = 10;
-    private int damageVariance = 3;
+    private int attackDamage;
+    private int damageVariance;
 
-    public Enemy(Position position, Random random) {
-        this(position, Tileset.ENEMY, 10, 7, 8, random);
-    }
-
-    public Enemy(Position position, TETile tile, int hp, int sightRange, int moveInterval, Random random) {
+    public Enemy(Position position, TETile tile, int hp, int sightRange,
+                 int moveInterval, int attackDamage, int damageVariance, Random random) {
         super(position, tile);
         this.hp = hp;
         this.sightRange = sightRange;
         this.moveInterval = moveInterval;
+        this.attackDamage = attackDamage;
+        this.damageVariance = damageVariance;
         this.tickCounter = 0;
         this.random = random;
         this.actionQueue = new ActionQueue();
@@ -100,6 +99,10 @@ public class Enemy extends Entity {
         return damageVariance;
     }
 
+    public int getMoveInterval() {
+        return moveInterval;
+    }
+
     public void setHp(int hp) {
         this.hp = hp;
     }
@@ -110,24 +113,40 @@ public class Enemy extends Entity {
 
     /**
      * 在世界中随机生成多个敌人。
-     * @param world 游戏世界
-     * @param seed 种子
-     * @param playerPos 玩家位置，用于距离检查
-     * @param extraCount 额外敌人数量（用于层数递增）
+     *
+     * 生成逻辑分三步：
+     * 1. 确定数量：基础数量(config) + 楼层递增(extraCount) + 随机波动(0~2)，
+     *    随机波动由 seed 决定，保证同一种子每次生成的数量一致。
+     * 2. 创建敌人：每个敌人有独立的 Random（seed + 编号），确保属性稳定可复现。
+     *    先用 initEntity 在世界上随机放置。
+     * 3. 距离检查：如果敌人离玩家太近（曼哈顿距离 < 5），换一个新位置重新放置，
+     *    直到满足距离要求为止。retry 使用不同的种子后缀避免死循环落在同一位置。
+     *
+     * @param world     游戏世界
+     * @param seed      种子，用于敌人数量和位置的可复现随机
+     * @param playerPos 玩家位置，敌人不会生成在离玩家太近的地方
+     * @param extraCount 额外敌人数量（随楼层递增，floorLevel - 1 传入）
+     * @param config    游戏平衡配置（血量、视野、攻击等参数）
      * @return 生成的敌人列表
      */
-    public static List<Enemy> spawnEnemies(TETile[][] world, String seed, Position playerPos, int extraCount) {
+    public static List<Enemy> spawnEnemies(TETile[][] world, String seed,
+            Position playerPos, int extraCount, GameConfig config) {
         List<Enemy> enemies = new ArrayList<>();
         Random countRandom = new Random((seed + "_enemy_count").hashCode());
-        int count = 3 + extraCount + countRandom.nextInt(3);
+        int count = config.enemyBaseCount + extraCount + countRandom.nextInt(3);
 
         for (int i = 0; i < count; i++) {
             Random random = new Random((seed + "_enemy_" + i).hashCode());
-            Enemy enemy = new Enemy(new Position(0, 0), random);
+            Enemy enemy = new Enemy(new Position(0, 0), Tileset.ENEMY,
+                    config.enemyHp, config.enemySightRange, config.enemyMoveInterval,
+                    config.enemyAttack, config.enemyDamageVariance, random);
             Entity.initEntity(enemy, world, seed + "_pos_" + i);
 
+            int retryCount = 0;
             while (MathHelper.manhattanDistance(enemy.getPosition(), playerPos) < 5) {
-                Entity.initEntity(enemy, world, seed + "_pos_" + i + "_retry");
+                enemy.setPosition(new Position(-1, -1));  // 强制 initEntity 重新随机放置
+                Entity.initEntity(enemy, world, seed + "_pos_" + i + "_retry_" + retryCount);
+                retryCount++;
             }
 
             enemies.add(enemy);

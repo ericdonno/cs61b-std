@@ -30,6 +30,17 @@ public class Player extends Entity {
         this.sightRange = sightRange;
     }
 
+    /** 从 GameConfig 创建玩家 */
+    public Player(Position position, GameConfig config) {
+        super(position, Tileset.PLAYER);
+        this.hp = config.playerHp;
+        this.sightRange = 10;
+        this.attackDamage = config.playerAttack;
+        this.damageVariance = config.playerDamageVariance;
+        this.maxCharge = config.playerMaxCharge;
+        this.chargeRate = config.playerChargeRate;
+    }
+
     public int getHp() {
         return hp;
     }
@@ -46,8 +57,24 @@ public class Player extends Entity {
         return attackDamage;
     }
 
+    public void setAttackDamage(int attackDamage) {
+        this.attackDamage = attackDamage;
+    }
+
     public int getDamageVariance() {
         return damageVariance;
+    }
+
+    public void setDamageVariance(int damageVariance) {
+        this.damageVariance = damageVariance;
+    }
+
+    public void setMaxCharge(int maxCharge) {
+        this.maxCharge = maxCharge;
+    }
+
+    public void setChargeRate(int chargeRate) {
+        this.chargeRate = chargeRate;
     }
 
     /** 每帧更新蓄力 */
@@ -73,6 +100,10 @@ public class Player extends Entity {
 
     public int getMaxCharge() {
         return maxCharge;
+    }
+
+    public int getChargeRate() {
+        return chargeRate;
     }
 
     /** 设置受击状态，持续 N 帧 */
