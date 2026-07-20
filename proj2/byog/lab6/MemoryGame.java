@@ -8,7 +8,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Random;
 
-import static byog.Core.RandomUtils.uniform;
+import static byog.Common.RandomUtils.uniform;
 
 public class MemoryGame {
     private int width;

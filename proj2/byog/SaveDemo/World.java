@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.Random;
 
-import byog.Core.RandomUtils;
+import byog.Common.RandomUtils;
 
 import java.awt.Color;
 import java.io.Serializable;

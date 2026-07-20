@@ -3,8 +3,8 @@ package byog.Helper;
 import byog.lab5.Position;
 import java.util.*;
 
-import static byog.Core.RandomUtils.poisson;
-import static byog.Core.RandomUtils.uniform;
+import static byog.Common.RandomUtils.poisson;
+import static byog.Common.RandomUtils.uniform;
 
 public class MathHelper {
     /**
