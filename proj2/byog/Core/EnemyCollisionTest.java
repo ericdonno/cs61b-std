@@ -18,8 +18,8 @@ public class EnemyCollisionTest {
         // 2. 创建实体管理器
         EntityManager em = new EntityManager();
 
-        // 3. 玩家放在 (2,2) 正中
-        Player player = new Player(new Position(2, 2));
+        // 3. 玩家放在 (2,2) 正中，HP 足够高保证 500 tick 内不死亡
+        Player player = new Player(new Position(2, 2), 10000, 10);
         em.addEntity(player);
 
         // 4. 两个敌人放在紧邻位置

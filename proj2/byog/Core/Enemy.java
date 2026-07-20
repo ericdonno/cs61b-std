@@ -44,6 +44,16 @@ public class Enemy extends Entity {
      * @param player 玩家，用于构建快照供 Brain 决策
      */
     public void updateAI(TETile[][] world, EntityManager entityMgr, Player player) {
+        updateAI(world, entityMgr, player, null, AgentTrace.NO_OP);
+    }
+
+    /**
+     * 带 trace 的 updateAI。traceContext 为 null 时不记录事件。
+     * @param traceContext 场景上下文（可为 null）
+     * @param traceSink trace 消费端
+     */
+    public void updateAI(TETile[][] world, EntityManager entityMgr, Player player,
+                         AgentTrace.Context traceContext, AgentTrace.Sink traceSink) {
         tickCounter++;
         if (tickCounter >= moveInterval) {
             tickCounter = 0;
@@ -51,7 +61,19 @@ public class Enemy extends Entity {
             // 每 动作tick 评估当前局势
             GameStateSnapshot snapshot = new GameStateSnapshot(world,
                     player.getPosition(), this.getPosition(), this.getId());
+
+            if (traceContext != null) {
+                safeRecord(traceSink,
+                        AgentTrace.Event.legacyDecisionInput(traceContext));
+            }
+
             StrategicIntent intent = brain.think(snapshot);
+
+            if (traceContext != null) {
+                safeRecord(traceSink,
+                        AgentTrace.Event.intentSelected(traceContext, intent));
+            }
+
             StrategicIntent.Strategy newStrategy = intent.getStrategy();
 
             // 策略切换 → 立即清空旧队列，重新规划
@@ -71,12 +93,28 @@ public class Enemy extends Entity {
             }
 
             for (int i = 0; i < MAX_RETRY; i++) {
-                Action action = actionQueue.poll();
+                Action action = actionQueue.poll();   // 取出action准备执行
                 if (action == null) {
                     break;
                 }
-                // 行动
-                if (action.execute(world, this) == Action.ActionResult.SUCCESS) {
+
+                Position before = this.getPosition();
+                if (traceContext != null) {
+                    safeRecord(traceSink,
+                            AgentTrace.Event.actionAttempted(
+                                    traceContext, i, action, before));
+                }
+
+                Action.ActionResult result = action.execute(world, this);
+
+                if (traceContext != null) {
+                    safeRecord(traceSink,
+                            AgentTrace.Event.actionResult(
+                                    traceContext, i, action, result, before,
+                                    this.getPosition()));
+                }
+
+                if (result == Action.ActionResult.SUCCESS) {
                     break;
                 }
             }
@@ -85,6 +123,19 @@ public class Enemy extends Entity {
 
     public int getHp() {
         return hp;
+    }
+
+    /**
+     * 安全记录 trace 事件。Sink 异常不得中断 AI 行为。
+     * 当前 InMemorySink 不会主动抛异常，这是防御性保护。
+     */
+    private static void safeRecord(AgentTrace.Sink sink, AgentTrace.Event event) {
+        try {
+            sink.record(event);
+        } catch (RuntimeException e) {
+            Logger.error("Trace record failed for " + event.eventType
+                    + ": " + e.getMessage());
+        }
     }
 
     public int getSightRange() {
