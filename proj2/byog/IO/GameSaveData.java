@@ -16,24 +16,18 @@ import java.util.Map;
 public class GameSaveData implements Serializable {
     private static final long serialVersionUID = 20250622L;
 
-    /** 世界生成种子，用于确定性重建世界 */
     public String seed;
 
-    /** 玩家在地图中的 X 坐标 */
     public int playerX;
 
-    /** 玩家在地图中的 Y 坐标 */
     public int playerY;
 
-    /**
-     * 开放式扩展数据。
-     * 未来新增的游戏机制将自己的状态以 key-value 形式存入此 Map。
-     * 例如：extraData.put("inventory", inventoryList);
-     *       extraData.put("enemyPositions", enemyPosArray);
-     */
     public Map<String, Serializable> extraData;
+
+    public Map<Integer, String> entityAgentIds;
 
     public GameSaveData() {
         extraData = new HashMap<>();
+        entityAgentIds = new HashMap<>();
     }
 }

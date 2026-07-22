@@ -165,8 +165,8 @@ public final class Phase0EncounterHarness {
         }
 
         Player player = new Player(playerPos, playerHp, 10);
-        Enemy guardA = new Enemy(aPos, Tileset.ENEMY, 20, 7, 1, 1, 0, new Random(guardASeed));
-        Enemy guardB = new Enemy(bPos, Tileset.ENEMY, 20, 7, 1, 1, 0, new Random(guardBSeed));
+        Enemy guardA = new Enemy(aPos, Tileset.ENEMY, 20, 7, 1, 1, 0, new Random(guardASeed), "guard-a");
+        Enemy guardB = new Enemy(bPos, Tileset.ENEMY, 20, 7, 1, 1, 0, new Random(guardBSeed), "guard-b");
 
         EntityManager em = new EntityManager();
         em.addEntity(player);
@@ -218,8 +218,10 @@ public final class Phase0EncounterHarness {
     public void step() {
         // actorKey 是场景内稳定身份，不能替换为跨运行不稳定的 Entity.id。
         AgentTrace.Context ctxA = new AgentTrace.Context(
+                AgentTrace.PHASE0_SCHEMA_VERSION,
                 SCENARIO_ID, SCENARIO_VERSION, logicalTick, "guard-a");
         AgentTrace.Context ctxB = new AgentTrace.Context(
+                AgentTrace.PHASE0_SCHEMA_VERSION,
                 SCENARIO_ID, SCENARIO_VERSION, logicalTick, "guard-b");
 
         // 显式调用保证 scheduling determinism，不依赖 HashMap 遍历顺序。

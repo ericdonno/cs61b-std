@@ -14,7 +14,7 @@ public final class HeardEvent {
 
     public HeardEvent(SoundType type, Position sourcePosition, long turn) {
         this.type = type;
-        this.sourcePosition = sourcePosition;
+        this.sourcePosition = copyPosition(sourcePosition);
         this.turn = turn;
     }
 
@@ -24,11 +24,15 @@ public final class HeardEvent {
 
     /** 声源位置（可能不精确） */
     public Position getSourcePosition() {
-        return sourcePosition;
+        return copyPosition(sourcePosition);
     }
 
     /** 产生声音的 turn */
     public long getTurn() {
         return turn;
+    }
+
+    private static Position copyPosition(Position position) {
+        return position == null ? null : new Position(position.x, position.y);
     }
 }

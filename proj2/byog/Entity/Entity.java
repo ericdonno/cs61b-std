@@ -14,8 +14,6 @@ public abstract class Entity {
     protected Position position;
     protected TETile tile;
     protected boolean alive = true;
-    /** 正式可存档身份，稳定性由调用方保证 */
-    protected String agentId = null;
 
     public Entity(Position position, TETile tile) {
         this.position = position;
@@ -40,14 +38,6 @@ public abstract class Entity {
 
     public int getId() {
         return id;
-    }
-
-    public String getAgentId() {
-        return agentId;
-    }
-
-    public void setAgentId(String agentId) {
-        this.agentId = agentId;
     }
 
     public boolean isAlive() {

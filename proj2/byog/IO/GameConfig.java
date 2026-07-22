@@ -29,6 +29,7 @@ public class GameConfig {
     public final int enemyMoveInterval;
     public final int enemySightRange;
     public final int enemyBaseCount;
+    public final boolean debugShowEnemyFov;
 
     public GameConfig(Difficulty difficulty) {
         this.difficulty = difficulty;
@@ -46,6 +47,7 @@ public class GameConfig {
         enemyMoveInterval = getInt(props, prefix + "enemy.moveInterval", 5);
         enemySightRange = getInt(props, prefix + "enemy.sightRange", 7);
         enemyBaseCount = getInt(props, prefix + "enemy.baseCount", 3);
+        debugShowEnemyFov = getBoolean(props, "debug.showEnemyFov", false);
     }
 
     /** 加载配置文件，不存在则自动生成 */
@@ -76,6 +78,15 @@ public class GameConfig {
                     key, value, defaultValue);
             return defaultValue;
         }
+    }
+
+    /** 从 Properties 读取 boolean，失败则返回默认值 */
+    private static boolean getBoolean(Properties props, String key, boolean defaultValue) {
+        String value = props.getProperty(key);
+        if (value == null) {
+            return defaultValue;
+        }
+        return Boolean.parseBoolean(value.trim());
     }
 
     /** 生成包含三难度默认配置的 properties 文件 */
@@ -127,6 +138,9 @@ public class GameConfig {
             writer.write("hardcore.enemy.moveInterval=3\n");
             writer.write("hardcore.enemy.sightRange=9\n");
             writer.write("hardcore.enemy.baseCount=4\n");
+            writer.write("\n");
+            writer.write("# ========== Debug ==========\n");
+            writer.write("debug.showEnemyFov=false\n");
             writer.flush();
             Logger.info("Default config file generated: %s", CONFIG_PATH);
         } catch (IOException e) {

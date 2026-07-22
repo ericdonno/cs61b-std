@@ -7,6 +7,7 @@ public class EntityState implements Serializable {
     private static final long serialVersionUID = 2L;
 
     public String type;    // "Player" | "Enemy"
+    public String agentId; // 正式可存档身份（仅 Enemy 使用）
     public int x, y;       // position
     public boolean alive;
     public int hp;

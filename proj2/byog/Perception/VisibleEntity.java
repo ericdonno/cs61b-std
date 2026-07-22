@@ -16,7 +16,7 @@ public final class VisibleEntity {
     public VisibleEntity(EntityType type, Position position,
                          int visibleHp, String agentId) {
         this.type = type;
-        this.position = position;
+        this.position = copyPosition(position);
         this.visibleHp = visibleHp;
         this.agentId = agentId;
     }
@@ -26,7 +26,7 @@ public final class VisibleEntity {
     }
 
     public Position getPosition() {
-        return position;
+        return copyPosition(position);
     }
 
     public int getVisibleHp() {
@@ -36,5 +36,9 @@ public final class VisibleEntity {
     /** 如果是 enemy，返回其 agentId；否则返回 null */
     public String getAgentId() {
         return agentId;
+    }
+
+    private static Position copyPosition(Position position) {
+        return position == null ? null : new Position(position.x, position.y);
     }
 }

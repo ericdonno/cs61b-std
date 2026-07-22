@@ -25,7 +25,8 @@ public final class AgentTrace {
      * trace JSON 的结构版本。若将来改变字段或字段语义，应升级版本，
      * 不能让同一个版本号同时表示两种不兼容的事件协议。
      */
-    public static final String SCHEMA_VERSION = "phase0.trace.v1";
+    public static final String PHASE0_SCHEMA_VERSION = "phase0.trace.v1";
+    public static final String SCHEMA_VERSION = "phase1.trace.v1";
 
     /**
      * 一次敌人决策的四个生命周期节点。
@@ -34,6 +35,7 @@ public final class AgentTrace {
      */
     public enum EventType {
         LEGACY_DECISION_INPUT,
+        OBSERVATION_GENERATED,
         INTENT_SELECTED,
         ACTION_ATTEMPTED,
         ACTION_RESULT
@@ -47,6 +49,8 @@ public final class AgentTrace {
      * 它不包含 Entity.id 和 wall-clock timestamp，因为这些值跨运行不稳定。</p>
      */
     public static final class Context {
+        /** 本次事件使用的 trace schema。 */
+        public final String schemaVersion;
         /** 固定场景名，例如 baseline-two-guards。 */
         public final String scenarioId;
         /** 场景定义版本；地图或参数发生语义变化时必须提升。 */
@@ -58,6 +62,12 @@ public final class AgentTrace {
 
         public Context(String scenarioId, int scenarioVersion,
                        long logicalTick, String actorKey) {
+            this(SCHEMA_VERSION, scenarioId, scenarioVersion, logicalTick, actorKey);
+        }
+
+        public Context(String schemaVersion, String scenarioId, int scenarioVersion,
+                       long logicalTick, String actorKey) {
+            this.schemaVersion = schemaVersion;
             this.scenarioId = scenarioId;
             this.scenarioVersion = scenarioVersion;
             this.logicalTick = logicalTick;
@@ -72,7 +82,7 @@ public final class AgentTrace {
      * 与自己相关的字段，其余字段统一输出 JSON null，而不是省略。调用方不能直接
      * new Event，而必须使用下面四个 factory，以免构造出语义不完整的字段组合。</p>
      */
-    public static final class Event {
+    public static final class TraceEvent {
         // ----- 所有事件共有的协议、场景、逻辑时间和身份 -----
         public final String schemaVersion;
         public final String scenarioId;
@@ -99,14 +109,21 @@ public final class AgentTrace {
         public final Integer afterX;
         public final Integer afterY;
 
-        private Event(String schemaVersion, String scenarioId, int scenarioVersion,
+        // ----- Observation 感知字段（仅 OBSERVATION_GENERATED 时有值）-----
+        public final Boolean visiblePlayer;
+        public final Integer visibleEntityCount;
+        public final Integer fovTileCount;
+
+        private TraceEvent(String schemaVersion, String scenarioId, int scenarioVersion,
                       long logicalTick, Integer actionOrdinal, String actorKey,
                       EventType eventType, String inputKind,
                       String goal, String strategy,
                       Integer targetX, Integer targetY,
                       String actionType, String rawActionResult,
                       Integer beforeX, Integer beforeY,
-                      Integer afterX, Integer afterY) {
+                      Integer afterX, Integer afterY,
+                      Boolean visiblePlayer, Integer visibleEntityCount,
+                      Integer fovTileCount) {
             this.schemaVersion = schemaVersion;
             this.scenarioId = scenarioId;
             this.scenarioVersion = scenarioVersion;
@@ -125,6 +142,9 @@ public final class AgentTrace {
             this.beforeY = beforeY;
             this.afterX = afterX;
             this.afterY = afterY;
+            this.visiblePlayer = visiblePlayer;
+            this.visibleEntityCount = visibleEntityCount;
+            this.fovTileCount = fovTileCount;
         }
 
         /**
@@ -132,21 +152,37 @@ public final class AgentTrace {
          * 事件名和 inputKind 特意带有 legacy，防止后续把它误称为已实现知识边界的
          * 私有 Observation。
          */
-        public static Event legacyDecisionInput(Context context) {
-            return new Event(SCHEMA_VERSION, context.scenarioId,
+        public static TraceEvent legacyDecisionInput(Context context) {
+            return new TraceEvent(context.schemaVersion, context.scenarioId,
                     context.scenarioVersion, context.logicalTick,
                     null, context.actorKey,
                     EventType.LEGACY_DECISION_INPUT,
                     "legacy-full-world-snapshot",
                     null, null, null, null,
-                    null, null, null, null, null, null);
+                    null, null, null, null, null, null,
+                    null, null, null);
+        }
+
+        /**
+         * 记录私有感知结果。仅 Phase 1+ 的私有感知路径使用。
+         */
+        public static TraceEvent observationGenerated(Context context,
+                boolean visiblePlayer, int visibleEntityCount, int fovTileCount) {
+            return new TraceEvent(context.schemaVersion, context.scenarioId,
+                    context.scenarioVersion, context.logicalTick,
+                    null, context.actorKey,
+                    EventType.OBSERVATION_GENERATED,
+                    "private-perception-v1",
+                    null, null, null, null,
+                    null, null, null, null, null, null,
+                    visiblePlayer, visibleEntityCount, fovTileCount);
         }
 
         /**
          * 记录 Brain 返回的高层意图。目标坐标允许为空，例如某些未来策略可能没有
          * 明确位置；goal 和 strategy 保留枚举名称，保证输出稳定且便于比较。
          */
-        public static Event intentSelected(Context context, StrategicIntent intent) {
+        public static TraceEvent intentSelected(Context context, StrategicIntent intent) {
             Integer tx = null;
             Integer ty = null;
             Position tp = intent.getTargetPosition();
@@ -154,7 +190,7 @@ public final class AgentTrace {
                 tx = tp.x;
                 ty = tp.y;
             }
-            return new Event(SCHEMA_VERSION, context.scenarioId,
+            return new TraceEvent(context.schemaVersion, context.scenarioId,
                     context.scenarioVersion, context.logicalTick,
                     null, context.actorKey,
                     EventType.INTENT_SELECTED,
@@ -162,16 +198,16 @@ public final class AgentTrace {
                     intent.getGoal().name(),
                     intent.getStrategy().name(),
                     tx, ty,
-                    null, null, null, null, null, null);
+                    null, null, null, null, null, null,
+                    null, null, null);
         }
-
         /**
          * 在 action.execute 之前记录一次真实动作尝试。
          * before 坐标在执行前立即读取，用于和对应 ACTION_RESULT 的 after 坐标比较。
          */
-        public static Event actionAttempted(Context context, int actionOrdinal,
+        public static TraceEvent actionAttempted(Context context, int actionOrdinal,
                                             Action action, Position before) {
-            return new Event(SCHEMA_VERSION, context.scenarioId,
+            return new TraceEvent(context.schemaVersion, context.scenarioId,
                     context.scenarioVersion, context.logicalTick,
                     actionOrdinal, context.actorKey,
                     EventType.ACTION_ATTEMPTED,
@@ -179,17 +215,18 @@ public final class AgentTrace {
                     action.getClass().getSimpleName(),
                     null,
                     before.x, before.y,
-                    null, null);
+                    null, null,
+                    null, null, null);
         }
 
         /**
          * 在 action.execute 返回后记录原始结果和执行后位置。
          * actionOrdinal 必须与对应 ACTION_ATTEMPTED 相同，构成生命周期关联键的一部分。
          */
-        public static Event actionResult(Context context, int actionOrdinal,
+        public static TraceEvent actionResult(Context context, int actionOrdinal,
                                          Action action, Action.ActionResult result,
                                          Position before, Position after) {
-            return new Event(SCHEMA_VERSION, context.scenarioId,
+            return new TraceEvent(context.schemaVersion, context.scenarioId,
                     context.scenarioVersion, context.logicalTick,
                     actionOrdinal, context.actorKey,
                     EventType.ACTION_RESULT,
@@ -197,7 +234,8 @@ public final class AgentTrace {
                     action.getClass().getSimpleName(),
                     result.name(),
                     before.x, before.y,
-                    after.x, after.y);
+                    after.x, after.y,
+                    null, null, null);
         }
     }
 
@@ -206,7 +244,7 @@ public final class AgentTrace {
      * 文件还是其他系统，从而保持事件生产与存储方式分离。
      */
     public interface Sink {
-        void record(Event event);
+        void record(TraceEvent event);
     }
 
     /**
@@ -221,11 +259,11 @@ public final class AgentTrace {
      * sequence，因此这里不能改用无顺序集合。
      */
     public static final class InMemorySink implements Sink {
-        private final List<Event> events = new ArrayList<>();
+        private final List<TraceEvent> events = new ArrayList<>();
 
         /** 追加事件；索引即该事件序列化时的全局 sequence。 */
         @Override
-        public void record(Event event) {
+        public void record(TraceEvent event) {
             events.add(event);
         }
 
@@ -233,7 +271,7 @@ public final class AgentTrace {
          * 返回防御性副本，避免测试或调用方通过 clear/remove 修改 Sink 内部证据。
          * Event 本身不可变，所以不需要逐个深拷贝。
          */
-        public List<Event> events() {
+        public List<TraceEvent> events() {
             return new ArrayList<>(events);
         }
 
@@ -248,7 +286,7 @@ public final class AgentTrace {
             StringBuilder sb = new StringBuilder();
             sb.append("[\n");
             for (int i = 0; i < events.size(); i++) {
-                Event e = events.get(i);
+                TraceEvent e = events.get(i);
                 sb.append("  {");
                 appendField(sb, "schemaVersion", e.schemaVersion, false);
                 appendField(sb, "scenarioId", e.scenarioId, false);
@@ -268,7 +306,13 @@ public final class AgentTrace {
                 appendNullableInt(sb, "beforeX", e.beforeX, false);
                 appendNullableInt(sb, "beforeY", e.beforeY, false);
                 appendNullableInt(sb, "afterX", e.afterX, false);
-                appendNullableInt(sb, "afterY", e.afterY, true);
+                boolean phase0Schema = PHASE0_SCHEMA_VERSION.equals(e.schemaVersion);
+                appendNullableInt(sb, "afterY", e.afterY, phase0Schema);
+                if (!phase0Schema) {
+                    appendNullableBoolean(sb, "visiblePlayer", e.visiblePlayer, false);
+                    appendNullableInt(sb, "visibleEntityCount", e.visibleEntityCount, false);
+                    appendNullableInt(sb, "fovTileCount", e.fovTileCount, true);
+                }
                 sb.append("}");
                 if (i < events.size() - 1) {
                     sb.append(",");
@@ -307,6 +351,19 @@ public final class AgentTrace {
         }
 
         private void appendNullableInt(StringBuilder sb, String key, Integer value, boolean last) {
+            sb.append("\"").append(key).append("\":");
+            if (value == null) {
+                sb.append("null");
+            } else {
+                sb.append(value);
+            }
+            if (!last) {
+                sb.append(",");
+            }
+        }
+
+        private void appendNullableBoolean(StringBuilder sb, String key,
+                                            Boolean value, boolean last) {
             sb.append("\"").append(key).append("\":");
             if (value == null) {
                 sb.append("null");

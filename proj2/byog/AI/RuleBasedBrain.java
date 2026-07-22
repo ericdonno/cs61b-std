@@ -2,10 +2,14 @@ package byog.AI;
 
 import byog.Helper.Logger;
 import byog.Helper.MathHelper;
+import byog.Perception.ObservationEnvelope;
+import byog.Perception.VisibleEntity;
 import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
 import byog.lab5.Position;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
 /**
@@ -52,6 +56,69 @@ public class RuleBasedBrain implements EnemyBrain {
             return new StrategicIntent(StrategicIntent.Goal.PATROL,
                     StrategicIntent.Strategy.PATROL, patrolTarget);
         }
+    }
+
+    /**
+     * 基于私有 ObservationEnvelope 做决策。
+     * 玩家可见 → 根据距离决定 ATTACK/CHASE；玩家不可见 → PATROL。
+     */
+    @Override
+    public StrategicIntent thinkFromObservation(ObservationEnvelope obs) {
+        Position selfPos = obs.getSelfPosition();
+        VisibleEntity player = obs.getVisiblePlayer();
+
+        if (player != null) {
+            int dist = MathHelper.manhattanDistance(selfPos, player.getPosition());
+            if (dist == 1) {
+                Logger.debug("Enemy '%s' RuleBasedBrain: dist=%d → ATTACK",
+                        obs.getAgentId(), dist);
+                return new StrategicIntent(StrategicIntent.Goal.ATTACK_PLAYER,
+                        StrategicIntent.Strategy.ATTACK, player.getPosition());
+            } else {
+                Logger.debug("Enemy '%s' RuleBasedBrain: dist=%d → CHASE",
+                        obs.getAgentId(), dist);
+                return new StrategicIntent(StrategicIntent.Goal.CHASE,
+                        StrategicIntent.Strategy.CHASE, player.getPosition());
+            }
+        } else {
+            Position patrolTarget = generatePatrolPosFromObservation(obs, selfPos);
+            Logger.debug("Enemy '%s' RuleBasedBrain: cannot see player → PATROL target=(%d,%d)",
+                    obs.getAgentId(), patrolTarget.x, patrolTarget.y);
+            return new StrategicIntent(StrategicIntent.Goal.PATROL,
+                    StrategicIntent.Strategy.PATROL, patrolTarget);
+        }
+    }
+
+    /**
+     * 从 ObservationEnvelope 的可见区域中生成巡逻目标。
+     * 只选可见且可行走的 tile，曼哈顿距离在 3~8 格范围内。
+     */
+    private Position generatePatrolPosFromObservation(ObservationEnvelope obs, Position enemyPos) {
+        int minDist = 3;
+        int maxDist = 8;
+        List<Position> candidates = new ArrayList<>();
+
+        for (int dx = -maxDist; dx <= maxDist; dx++) {
+            for (int dy = -maxDist; dy <= maxDist; dy++) {
+                int nx = enemyPos.x + dx;
+                int ny = enemyPos.y + dy;
+
+                if (!obs.isWalkable(nx, ny)) {
+                    continue;
+                }
+
+                int dist = Math.abs(dx) + Math.abs(dy);
+                if (dist >= minDist && dist <= maxDist) {
+                    candidates.add(new Position(nx, ny));
+                }
+            }
+        }
+
+        if (!candidates.isEmpty()) {
+            return candidates.get(random.nextInt(candidates.size()));
+        }
+
+        return new Position(enemyPos.x, enemyPos.y);
     }
 
     /**

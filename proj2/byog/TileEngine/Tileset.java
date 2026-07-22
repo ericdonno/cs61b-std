@@ -23,6 +23,9 @@ public class Tileset {
             "wall");
     public static final TETile FLOOR = new TETile('·', new Color(128, 192, 128), Color.black,
             "floor");
+    /** 敌人视野内的地板瓦片：与 FLOOR 相同字符，深红背景 */
+    public static final TETile FLOOR_FOV = new TETile('·',
+            new Color(128, 192, 128), new Color(80, 20, 20), "floor (enemy sight)");
     public static final TETile NOTHING = new TETile(' ', Color.black, Color.black, "nothing");
     public static final TETile GRASS = new TETile('"', Color.green, Color.black, "grass");
     public static final TETile WATER = new TETile('≈', Color.blue, Color.black, "water");

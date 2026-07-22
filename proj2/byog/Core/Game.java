@@ -513,6 +513,24 @@ public class Game {
             }
         }
 
+        // --- FOV 可视化（debug）---
+        if (gameConfig != null && gameConfig.debugShowEnemyFov) {
+            for (Entity e : entityMgr.getAllEntities()) {
+                if (e instanceof Enemy enemy && e.isAlive()) {
+                    boolean[][] mask = enemy.getVisibleMask();
+                    if (mask == null) continue;
+                    for (int x = 0; x < frame.length && x < mask.length; x++) {
+                        for (int y = 0; y < frame[0].length && y < mask[x].length; y++) {
+                            if (mask[x][y] && frame[x][y] == Tileset.FLOOR) {
+                                frame[x][y] = Tileset.FLOOR_FOV;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // --- end FOV ---
+
         // 攻击动画：周围8格替换为橙色闪光瓦片，持续8帧
         if (attackFrame >= 0 && frameCounter - attackFrame < 8) {
             int[] dx = {-1, 0, 1, -1, 1, -1, 0, 1};
@@ -640,6 +658,7 @@ public class Game {
         data.playerY = player.getPosition().y;
 
         List<EntityState> states = new ArrayList<>();
+        int idx = 0;
         for (Entity e : entityMgr.getAllEntities()) {
             EntityState s = new EntityState();
             s.x = e.getPosition().x;
@@ -655,13 +674,16 @@ public class Game {
                 s.chargeRate = pl.getChargeRate();
             } else if (e instanceof Enemy enemy) {
                 s.type = "Enemy";
+                s.agentId = enemy.getAgentId();
                 s.hp = enemy.getHp();
                 s.sightRange = enemy.getSightRange();
                 s.attackDamage = enemy.getAttackDamage();
                 s.damageVariance = enemy.getDamageVariance();
                 s.moveInterval = enemy.getMoveInterval();
+                data.entityAgentIds.put(idx, enemy.getAgentId());
             }
             states.add(s);
+            idx++;
         }
         data.extraData.put("entityStates", (java.io.Serializable) states);
         data.extraData.put("floorLevel", floorLevel);
@@ -718,8 +740,15 @@ public class Game {
                     int mvInterval = (s.moveInterval != 0) ? s.moveInterval : gameConfig.enemyMoveInterval;
                     int atk = (s.attackDamage != 0) ? s.attackDamage : gameConfig.enemyAttack;
                     int atkVariance = (s.damageVariance != 0) ? s.damageVariance : gameConfig.enemyDamageVariance;
+                    String agentId = null;
+                    if (data.entityAgentIds != null) {
+                        agentId = data.entityAgentIds.get(states.indexOf(s));
+                    }
+                    if (agentId == null) {
+                        agentId = (s.agentId != null) ? s.agentId : "entity-" + states.indexOf(s);
+                    }
                     Enemy enemy = new Enemy(new Position(s.x, s.y), Tileset.ENEMY,
-                            s.hp, s.sightRange, mvInterval, atk, atkVariance, random);
+                            s.hp, s.sightRange, mvInterval, atk, atkVariance, random, agentId);
                     e = enemy;
                 } else {
                     continue;

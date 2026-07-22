@@ -234,7 +234,7 @@ public class Phase0EncounterTest {
         Phase0EncounterHarness harness = Phase0EncounterHarness.baselineTwoGuardsV1();
         harness.runTicks(12);
 
-        List<AgentTrace.Event> events = harness.getTraceSink().events();
+        List<AgentTrace.TraceEvent> events = harness.getTraceSink().events();
 
         String guardAFirstIntent = findFirstIntent(events, "guard-a");
         String guardBFirstIntent = findFirstIntent(events, "guard-b");
@@ -249,8 +249,8 @@ public class Phase0EncounterTest {
      * 从按 sequence 排序的事件列表中查找 actor 的第一个 INTENT_SELECTED goal。
      * 返回 null 让上层 assertEquals 给出明确失败，而不是在 helper 中抛异常。
      */
-    private static String findFirstIntent(List<AgentTrace.Event> events, String actorKey) {
-        for (AgentTrace.Event e : events) {
+    private static String findFirstIntent(List<AgentTrace.TraceEvent> events, String actorKey) {
+        for (AgentTrace.TraceEvent e : events) {
             if (e.actorKey.equals(actorKey)
                     && e.eventType == AgentTrace.EventType.INTENT_SELECTED) {
                 return e.goal;
@@ -269,7 +269,7 @@ public class Phase0EncounterTest {
     public void traceContainsDecisionLifecycle() {
         Phase0EncounterHarness harness = Phase0EncounterHarness.baselineTwoGuardsV1();
         harness.runTicks(12);
-        List<AgentTrace.Event> events = harness.getTraceSink().events();
+        List<AgentTrace.TraceEvent> events = harness.getTraceSink().events();
 
         for (String actorKey : new String[]{"guard-a", "guard-b"}) {
             boolean hasInput = false;
@@ -277,7 +277,7 @@ public class Phase0EncounterTest {
             boolean hasAttempt = false;
             boolean hasResult = false;
 
-            for (AgentTrace.Event e : events) {
+            for (AgentTrace.TraceEvent e : events) {
                 if (!actorKey.equals(e.actorKey)) {
                     continue;
                 }
@@ -307,25 +307,25 @@ public class Phase0EncounterTest {
      * 同时验证事件顺序（attempt 在前、result 在后），确保同 tick 内的事件不会被
      * 跨 tick 的相同 ordinal 混淆。</p>
      */
-    private void assertActionLifecyclePerTick(List<AgentTrace.Event> events, String actorKey) {
+    private void assertActionLifecyclePerTick(List<AgentTrace.TraceEvent> events, String actorKey) {
         // 按 logicalTick 分组，保留到达顺序。
-        Map<Long, List<AgentTrace.Event>> byTick = new LinkedHashMap<>();
-        for (AgentTrace.Event e : events) {
+        Map<Long, List<AgentTrace.TraceEvent>> byTick = new LinkedHashMap<>();
+        for (AgentTrace.TraceEvent e : events) {
             if (actorKey.equals(e.actorKey)) {
                 byTick.computeIfAbsent(e.logicalTick, k -> new ArrayList<>()).add(e);
             }
         }
 
-        for (Map.Entry<Long, List<AgentTrace.Event>> entry : byTick.entrySet()) {
+        for (Map.Entry<Long, List<AgentTrace.TraceEvent>> entry : byTick.entrySet()) {
             long tick = entry.getKey();
-            List<AgentTrace.Event> tickEvents = entry.getValue();
+            List<AgentTrace.TraceEvent> tickEvents = entry.getValue();
 
             Set<Integer> attempted = new HashSet<>();
             Set<Integer> results = new HashSet<>();
             // 记录每个 ordinal 是否已见过 attempt，用于验证 attempt 在 result 之前。
             Map<Integer, Boolean> attemptSeen = new HashMap<>();
 
-            for (AgentTrace.Event e : tickEvents) {
+            for (AgentTrace.TraceEvent e : tickEvents) {
                 if (e.actionOrdinal == null) {
                     continue;
                 }
@@ -470,7 +470,7 @@ public class Phase0EncounterTest {
     // ---------- 旧占位 helper；当前没有测试调用，应在后续清理 ----------
 
     /** 当前未使用；真实事件应从 harness.getTraceSink().events() 获取。 */
-    List<AgentTrace.Event> getTraceEvents() {
+    List<AgentTrace.TraceEvent> getTraceEvents() {
         return null; // used only via harness.getTraceSink()
     }
 }
