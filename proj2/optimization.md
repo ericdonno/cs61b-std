@@ -330,6 +330,70 @@ private void flushPendingChanges(List<MoveRecord> moves) {
 
 ---
 
+### 📋 优化 7：PerceptionSystem FOV 循环范围优化
+
+**问题**: 当前 `PerceptionSystem.computeObservation()` 中的 FOV 计算遍历了整个 `world` 数组（O(W×H)），
+内部通过 `manhattanDistance <= sightRange` 过滤。sightRange 通常只有 7，但需要检查世界中的每一个 tile。
+
+```java
+// ❌ 当前：遍历整个世界，靠距离过滤
+for (int x = 0; x < world.length; x++) {
+    for (int y = 0; y < world[0].length; y++) {
+        int dist = Math.abs(x - selfX) + Math.abs(y - selfY);
+        if (dist <= sightRange) {
+            if (hasLineOfSight(world, selfX, selfY, x, y)) {
+                visibleMask[x][y] = true;
+            }
+        }
+    }
+}
+```
+
+sightRange=7 时曼哈顿菱形区域只有约 113 个 tile（`2R² + 2R + 1`），
+但当前 50×30 的世界需要迭代 1500 次，其中 92% 被距离检查过滤掉。
+
+**推荐方案**: 直接迭代 sightRange 菱形区域内的坐标，避免遍历世界：
+
+```java
+// ✅ 优化：只遍历 sightRange 菱形区域（约 R² 个 tile）
+int maxX = world.length;
+int maxY = world[0].length;
+
+for (int dx = -sightRange; dx <= sightRange; dx++) {
+    int maxDy = sightRange - Math.abs(dx);
+    for (int dy = -maxDy; dy <= maxDy; dy++) {
+        int x = selfX + dx;
+        int y = selfY + dy;
+        if (x < 0 || x >= maxX || y < 0 || y >= maxY) {
+            continue;
+        }
+        if (hasLineOfSight(world, selfX, selfY, x, y)) {
+            visibleMask[x][y] = true;
+        }
+    }
+}
+```
+
+同样，第二步"收集可见实体"的双重循环也应改为只遍历 FOV 内的区域。
+
+**改动文件**: [PerceptionSystem.java](file:///d:/Courses/cs61b/cs61b-std/proj2/byog/Perception/PerceptionSystem.java)
+
+**收益**:
+
+| sightRange | 菱形 tile 数 | 50×30 世界 | 节省 |
+|------------|-------------|-----------|------|
+| 5 | 61 | 1500 | 96% |
+| 7 | 113 | 1500 | 92% |
+| 10 | 221 | 1500 | 85% |
+
+- 迭代次数从 O(W×H) 降为 O(R²)，每个敌人每 tick 的计算量大幅减少
+- 无需在循环内计算曼哈顿距离（距离由 dx/dy 直接确定）
+
+**注意**: 菱形遍历会改变 tile 的访问顺序（从行优先变为菱形扩散）。这**不改变** `visibleMask` 的结果——每个 tile 的判断仍然是独立的 `hasLineOfSight` 调用。所有现有 LOS 测试应保持绿色。
+
+**当前世界尺寸下此优化不是必需的**（1500 次迭代仍然很快），但如果世界扩大或敌人数量增加，节省会很明显。建议在引入大量敌人（10+）之前实施。
+
+---
 ## 实施优先级建议
 
 | 优先级 | 优化项 | 状态 | 理由 |
@@ -340,6 +404,7 @@ private void flushPendingChanges(List<MoveRecord> moves) {
 | **P1（推荐）** | 优化 4: 存档持久化 | ✅ 已实现 | 实体状态跨存档持久化 |
 | **P2（可选）** | 优化 5: Entity ID | 📋 待实现 | 配合优化 4 使用，增加确定性 |
 | **P2（可选）** | 优化 6: 增量更新索引 | 📋 待实现 | 实体少时无关紧要，数量增长后有意义 |
+| **P2（可选）** | 优化 7: FOV 菱形遍历 | 📋 待实现 | 当前世界尺寸下性能足够，敌人/世界变大后再实施 |
 
 ---
 
