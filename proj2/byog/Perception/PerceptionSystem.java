@@ -103,7 +103,20 @@ public final class PerceptionSystem {
             }
         }
 
-        // 第二步：收集可见实体。只查询 FOV 内的位置，避免信息泄漏
+        // 第二步：固化可见 tile 快照（类型 + 可行走性），避免后续序列化时再读 live world
+        List<VisibleTile> visibleTiles = new ArrayList<>();
+        for (int x = 0; x < world.length; x++) {
+            for (int y = 0; y < world[0].length; y++) {
+                if (visibleMask[x][y]) {
+                    TETile tile = world[x][y];
+                    VisibleTile.TileType type = VisibleTile.tileTypeOf(tile);
+                    boolean walkable = tile != Tileset.WALL && tile != Tileset.NOTHING;
+                    visibleTiles.add(new VisibleTile(x, y, type, walkable));
+                }
+            }
+        }
+
+        // 第三步：收集可见实体。只查询 FOV 内的位置，避免信息泄漏
         for (int x = 0; x < world.length; x++) {
             for (int y = 0; y < world[0].length; y++) {
                 if (visibleMask[x][y]) {
@@ -133,11 +146,12 @@ public final class PerceptionSystem {
             }
         }
 
-        // 第三步：构造不可变的 ObservationEnvelope 返回，传入 world 引用供 isWalkable 查询
+        // 第四步：构造不可变快照；构造器只读取 world 来固化 walkableMask，不保存引用
         return new ObservationEnvelope(runId, floorId, self.getAgentId(),
                 observationSeq, currentTurn,
                 selfPos, self.getHp(),
                 visibleMask, visibleEntities, heardEvents,
+                visibleTiles,
                 world);
     }
 }

@@ -23,6 +23,7 @@ public final class ObservationEnvelope {
     private final boolean[][] walkableMask;
     private final List<VisibleEntity> visibleEntities;
     private final List<HeardEvent> heardEvents;
+    private final List<VisibleTile> visibleTiles;
 
     /** 包内可见，由 PerceptionSystem 创建 */
     ObservationEnvelope(String runId, int floorId, String agentId,
@@ -31,6 +32,7 @@ public final class ObservationEnvelope {
                         boolean[][] visibleMask,
                         List<VisibleEntity> visibleEntities,
                         List<HeardEvent> heardEvents,
+                        List<VisibleTile> visibleTiles,
                         TETile[][] world) {
         this.runId = runId;
         this.floorId = floorId;
@@ -45,6 +47,8 @@ public final class ObservationEnvelope {
                 new ArrayList<>(visibleEntities));
         this.heardEvents = Collections.unmodifiableList(
                 new ArrayList<>(heardEvents));
+        this.visibleTiles = Collections.unmodifiableList(
+                new ArrayList<>(visibleTiles));
     }
 
     public String getRunId() {
@@ -115,6 +119,11 @@ public final class ObservationEnvelope {
     /** 当前 tick 听到的事件 */
     public List<HeardEvent> getHeardEvents() {
         return heardEvents;
+    }
+
+    /** 可见 tile 快照列表（含坐标、类型、可行走性），不可变 */
+    public List<VisibleTile> getVisibleTiles() {
+        return visibleTiles;
     }
 
     /** 统计 visibleMask 中 true 的数量，用于 trace 的 fovTileCount */

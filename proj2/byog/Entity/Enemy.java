@@ -1,13 +1,17 @@
 package byog.Entity;
 
 import byog.Action.Action;
+import byog.Action.ActionOutcome;
 import byog.Action.ActionQueue;
+import byog.AI.AiTickContext;
 import byog.AI.BFSPathfinder;
 import byog.AI.ClassicalPlanner;
 import byog.AI.EnemyBrain;
 import byog.AI.GameStateSnapshot;
+import byog.AI.ReflexObservation;
 import byog.AI.RuleBasedBrain;
 import byog.AI.StrategicIntent;
+import byog.Bridge.AgentProtocol;
 import byog.Helper.Logger;
 import byog.Helper.MathHelper;
 import byog.IO.GameConfig;
@@ -39,6 +43,17 @@ public class Enemy extends Entity {
     private long observationSeq = 0;
     /** 最近一次私有感知计算的可见性遮罩，perceptionEnabled=false 时为 null */
     private boolean[][] cachedVisibleMask;
+    /** 上一个 commit/collect 阶段生成的不可变私有观察。 */
+    private ObservationEnvelope latestObservation;
+    /** 从 latestObservation 提取、供下一阶段快脑使用的有限切片。 */
+    private ReflexObservation latestReflexObservation;
+    /** execute 阶段产生、等待 commit 后补全的动作记录。 */
+    private PendingAction pendingAction;
+    /** 最近一个已经在 commit 后完成的动作结果。 */
+    private ActionOutcome lastActionOutcome;
+    private String currentDecisionId;
+    private int actionsExecutedForDecision;
+    private boolean agentRuntimeClosed;
 
     public Enemy(Position position, TETile tile, int hp, int sightRange,
                  int moveInterval, int attackDamage, int damageVariance,
@@ -56,6 +71,7 @@ public class Enemy extends Entity {
         this.agentId = agentId;
         this.perceptionEnabled = false;
         this.observationSeq = 0;
+        this.agentRuntimeClosed = false;
     }
 
     /**
@@ -75,6 +91,8 @@ public class Enemy extends Entity {
      */
     public void updateAI(TETile[][] world, EntityManager entityMgr, Player player,
                          AgentTrace.Context traceContext, AgentTrace.Sink traceSink) {
+        // Legacy Phase 0/1 harness seam.
+        // Production Game must not add new Phase 2 logic here.
         tickCounter++;
         // 每个动作（每隔moveInterval）评估当前局势
         if (tickCounter >= moveInterval) {
@@ -200,6 +218,199 @@ public class Enemy extends Entity {
         }
     }
 
+    /**
+     * Phase 2 production stage 1. Step 2.2 has no AgentSession yet, so this is
+     * deliberately a non-blocking no-op.
+     */
+    public void pollAgentMessages(AiTickContext context) {
+        if (agentRuntimeClosed) {
+            return;
+        }
+        if (context == null) {
+            throw new IllegalArgumentException("context must not be null");
+        }
+    }
+
+    /**
+     * Phase 2 production stage 2. At most one action is attempted whenever the
+     * original cooldown becomes due.
+     */
+    public void executeOneAction(AiTickContext context,
+                                 TETile[][] world,
+                                 EntityManager entityMgr) {
+        if (agentRuntimeClosed || !isAlive()) {
+            return;
+        }
+        if (context == null || world == null || entityMgr == null) {
+            throw new IllegalArgumentException(
+                    "context, world and entityMgr must not be null");
+        }
+        if (pendingAction != null) {
+            throw new IllegalStateException(
+                    "collectAgentUpdates must complete before the next execute");
+        }
+
+        // Preserve the Phase 1 cooldown order: increment first, then compare.
+        tickCounter++;
+        if (tickCounter < moveInterval) {
+            return;
+        }
+        tickCounter = 0;
+
+        // Game primes observations after spawn/load. A missing observation is a
+        // cold-start boundary, never permission to read the live Player object.
+        if (latestObservation == null) {
+            return;
+        }
+
+        StrategicIntent intent = brain.thinkFromObservation(latestObservation);
+        StrategicIntent.Strategy newStrategy = intent.getStrategy();
+        boolean strategyChanged = newStrategy != currentStrategy;
+
+        if (strategyChanged) {
+            Logger.info("Enemy#%d Strategy: %s → %s",
+                    this.getId(), currentStrategy, newStrategy);
+            currentStrategy = newStrategy;
+            startLocalDecision(context);
+            List<Action> actions = ClassicalPlanner.translateBounded(
+                    intent, getPosition(), getId(), world, entityMgr, random,
+                    actionQueue.getHighWater());
+            actionQueue.replaceWithBoundedPrefix(actions);
+        } else if (actionQueue.needRefill()) {
+            if (currentDecisionId == null) {
+                startLocalDecision(context);
+            }
+            List<Action> actions = ClassicalPlanner.translateBounded(
+                    intent, getPosition(), getId(), world, entityMgr, random,
+                    actionQueue.remainingCapacity());
+            actionQueue.appendBounded(actions);
+        }
+
+        Action action = actionQueue.poll();
+        if (action == null) {
+            return;
+        }
+
+        Position before = copyPosition(getPosition());
+        Action.ActionResult result = action.execute(world, this);
+        actionsExecutedForDecision++;
+        pendingAction = new PendingAction(
+                context.getRunId(), context.getFloorId(),
+                context.getLogicalTick(), currentDecisionId,
+                actionsExecutedForDecision, action.getClass().getSimpleName(),
+                result, before, AgentProtocol.DecisionSource.LOCAL_FALLBACK,
+                null);
+    }
+
+    /**
+     * Phase 2 production stage 4. The entity index must already reflect the
+     * action executed in stage 2.
+     */
+    public void collectAgentUpdates(AiTickContext context,
+                                    TETile[][] world,
+                                    EntityManager entityMgr,
+                                    Player player) {
+        if (agentRuntimeClosed || !isAlive()) {
+            return;
+        }
+        if (context == null || world == null || entityMgr == null
+                || player == null) {
+            throw new IllegalArgumentException(
+                    "context, world, entityMgr and player must not be null");
+        }
+        if (entityMgr.findEntityAt(getPosition()) != this) {
+            throw new IllegalStateException(
+                    "collectAgentUpdates must run after the world commit barrier");
+        }
+        if (pendingAction != null) {
+            ensureMatchingCollectContext(context, pendingAction);
+        }
+
+        ObservationEnvelope committedObservation =
+                PerceptionSystem.computeObservation(
+                        context.getRunId(), context.getFloorId(),
+                        getAndIncrementObservationSeq(),
+                        world, entityMgr, this, player, sightRange,
+                        context.getLogicalTick());
+        latestObservation = committedObservation;
+        latestReflexObservation = ReflexObservation.from(committedObservation);
+        cachedVisibleMask = committedObservation.getVisibleMask();
+
+        if (pendingAction != null) {
+            lastActionOutcome = new ActionOutcome(
+                    pendingAction.runId, pendingAction.floorId, agentId,
+                    pendingAction.logicalTick, pendingAction.decisionId,
+                    pendingAction.actionIndex, pendingAction.actionType,
+                    pendingAction.result, pendingAction.beforePosition,
+                    getPosition(), hp, pendingAction.decisionSource,
+                    pendingAction.overrideReason);
+            pendingAction = null;
+        }
+    }
+
+    /**
+     * Idempotent lifecycle seam. Step 2.2 owns no socket or IO thread.
+     */
+    public void closeAgentRuntime() {
+        if (agentRuntimeClosed) {
+            return;
+        }
+        agentRuntimeClosed = true;
+        actionQueue.clear();
+        pendingAction = null;
+    }
+
+    private void startLocalDecision(AiTickContext context) {
+        currentDecisionId = "local-" + agentId + "-tick-"
+                + context.getLogicalTick();
+        actionsExecutedForDecision = 0;
+    }
+
+    private static void ensureMatchingCollectContext(
+            AiTickContext context, PendingAction action) {
+        if (!action.runId.equals(context.getRunId())
+                || action.floorId != context.getFloorId()
+                || action.logicalTick != context.getLogicalTick()) {
+            throw new IllegalStateException(
+                    "execute and collect must use the same AI tick context");
+        }
+    }
+
+    private static Position copyPosition(Position position) {
+        return new Position(position.x, position.y);
+    }
+
+    private static final class PendingAction {
+        private final String runId;
+        private final int floorId;
+        private final long logicalTick;
+        private final String decisionId;
+        private final int actionIndex;
+        private final String actionType;
+        private final Action.ActionResult result;
+        private final Position beforePosition;
+        private final AgentProtocol.DecisionSource decisionSource;
+        private final String overrideReason;
+
+        private PendingAction(String runId, int floorId, long logicalTick,
+                              String decisionId, int actionIndex,
+                              String actionType, Action.ActionResult result,
+                              Position beforePosition,
+                              AgentProtocol.DecisionSource decisionSource,
+                              String overrideReason) {
+            this.runId = runId;
+            this.floorId = floorId;
+            this.logicalTick = logicalTick;
+            this.decisionId = decisionId;
+            this.actionIndex = actionIndex;
+            this.actionType = actionType;
+            this.result = result;
+            this.beforePosition = copyPosition(beforePosition);
+            this.decisionSource = decisionSource;
+            this.overrideReason = overrideReason;
+        }
+    }
+
     public int getHp() {
         return hp;
     }
@@ -239,6 +450,32 @@ public class Enemy extends Entity {
 
     public ActionQueue getActionQueue() {
         return actionQueue;
+    }
+
+    public ObservationEnvelope getLatestObservation() {
+        return latestObservation;
+    }
+
+    public ReflexObservation getLatestReflexObservation() {
+        return latestReflexObservation;
+    }
+
+    public ActionOutcome getLastActionOutcome() {
+        return lastActionOutcome;
+    }
+
+    public ActionOutcome consumeLastActionOutcome() {
+        ActionOutcome outcome = lastActionOutcome;
+        lastActionOutcome = null;
+        return outcome;
+    }
+
+    public boolean hasPendingActionOutcome() {
+        return pendingAction != null;
+    }
+
+    public boolean isAgentRuntimeClosed() {
+        return agentRuntimeClosed;
     }
 
     public void setPerceptionEnabled(boolean enabled) {

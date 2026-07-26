@@ -21,6 +21,42 @@ import java.util.Random;
 public class ClassicalPlanner {
 
     /**
+     * Phase 2 production planner entry point. It returns only the prefix that
+     * can fit in the cross-tick action buffer.
+     *
+     * <p>The adjacent ATTACK case emits the atomic attack directly. The
+     * legacy planner relied on same-tick retries to skip the blocked move into
+     * the player's occupied tile; the Phase 2 loop intentionally permits only
+     * one action attempt per cooldown.</p>
+     */
+    public static List<Action> translateBounded(
+            StrategicIntent intent, Position enemyPos, int enemyId,
+            TETile[][] world, EntityManager entityMgr, Random random,
+            int maxActions) {
+        List<Action> actions = new ArrayList<>();
+        if (maxActions <= 0) {
+            return actions;
+        }
+
+        Position targetPos = intent.getTargetPosition();
+        if (intent.getStrategy() == StrategicIntent.Strategy.ATTACK
+                && targetPos != null
+                && Math.abs(targetPos.x - enemyPos.x)
+                + Math.abs(targetPos.y - enemyPos.y) == 1) {
+            Direction attackDir = Direction.fromDelta(
+                    targetPos.x - enemyPos.x, targetPos.y - enemyPos.y);
+            actions.add(new AttackAction(entityMgr, attackDir, random));
+            return actions;
+        }
+
+        List<Action> translated = translate(intent, enemyPos, enemyId,
+                world, entityMgr, random);
+        int end = Math.min(maxActions, translated.size());
+        actions.addAll(translated.subList(0, end));
+        return actions;
+    }
+
+    /**
      * 将战略意图翻译为 MoveAction 序列。
      * @param intent    AI 大脑的战略意图
      * @param enemyPos  敌人当前位置

@@ -4,7 +4,7 @@
 >
 > 日期：2026-07-22
 >
-> 解除文档：`PROJECT_INTENT_zh-CN.md` §6-7、`DEVELOPMENT_ROADMAP.md` §3 INV-04/05/07、`PHASE_2_SPEC.md`
+> 依据文档：`PROJECT_INTENT_zh-CN.md` §6-7、`DEVELOPMENT_ROADMAP.md` §3 INV-04/05/07、`PHASE_2_SPEC.md`
 
 ---
 
@@ -130,36 +130,43 @@ LLM 的推理延迟不是异常路径，而是正常运行条件。一次真实�
 
 ```mermaid
 graph TD
-    W["已提交的世界状态"] --> P["PerceptionSystem<br/>私有 ReflexObservation"]
+    W["已提交的世界状态"] --> P["PerceptionSystem<br/>敌人私有感知"]
 
-    P --> R["ReflexController + ClassicalPlanner<br/>Java 快脑"]
+    P --> E["ObservationEnvelope<br/>更新 latest / 按需发送慢脑"]
+    E --> O["outbound queue<br/>合并 observation 与事件"]
+
+    P --> D{"action cooldown 到期？"}
+    D -->|否| T["结束本 tick<br/>等待下一 logical tick"]
+    T --> W
+    D -->|是| RO["ReflexObservation<br/>Java 本地最新快照"]
+    RO --> A["IntentArbiter<br/>规则、反射、战略优先级"]
+    A --> R["ReflexController + ClassicalPlanner<br/>Java 快脑"]
     R --> Q["ActionQueue<br/>原子动作缓冲"]
-    Q --> D{"action cooldown 到期？"}
-    D -->|否| P
-    D -->|是| X["执行最多一个 Action"]
+    Q --> X["执行最多一个 Action"]
     X --> C["EntityManager commit barrier<br/>flush / remove dead"]
     C --> W
 
-    P --> O["outbound queue<br/>合并 observation 与事件"]
     O --> S["AgentSession IO loop<br/>非阻塞连接与期限管理"]
     S --> M["Python Agent / LLM<br/>慢速战略推理"]
     M --> I["StrategicIntent<br/>目标、计划、中断策略"]
     I --> N["inbound queue"]
     N --> V["DecisionValidator<br/>身份、版本、时效、世界前提"]
     V --> L["IntentLease<br/>有效期与决策版本"]
-    L --> A["IntentArbiter<br/>规则、反射、战略优先级"]
-    A --> R
+    L --> A
 
     F["RuleBasedBrain<br/>冷启动、断线、硬超时 fallback"] --> A
-    X --> B["ActionOutcome + WorldEvent"]
+    C --> B["ActionOutcome + WorldEvent"]
     B --> O
 ```
+
+（从“已提交的世界状态”向下看：感知结果分成慢脑使用的 `ObservationEnvelope` 异步链路，以及 cooldown 到期后供 Java 快脑使用的 `ReflexObservation` 实时链路。慢脑返回的 Intent 经校验和仲裁后参与下一次行动，动作提交后的结果再反馈给慢脑，形成闭环。）
 
 图中术语速查：
 
 | 概念 | 简单解释 | 详细说明 |
 |------|----------|----------|
-| `ReflexObservation` | Java 每个 action tick 为单个敌人生成的最新私有感知，只包含该敌人此刻有权知道的信息。 | §2.10 |
+| `ObservationEnvelope` | 可序列化给慢脑的敌人私有感知；cooldown 期间可以替换 `latestObservation`，但只按事件、低水位或 heartbeat 调度入队。 | §2.5、§6.2 |
+| `ReflexObservation` | cooldown 到期、即将选择动作时为单个敌人生成的 Java 本地快照；不发送给 Python，也不包含隐藏信息。 | §2.10 |
 | `ReflexController`（reflex，快脑） | 毫秒级本地控制器；等待模型时仍能继续旧计划，并处理攻击、追击、避险和局部绕行。 | §2.2、§2.10 |
 | `ClassicalPlanner` | 把 `StrategicIntent` 翻译成若干可执行的原子动作，本身不负责长期战略。 | §8 |
 | `ActionQueue` | 跨 action tick 保存原子动作；每次 cooldown 到期最多消费一个动作。 | §8 |
@@ -175,9 +182,12 @@ graph TD
 | `RuleBasedBrain` | 无计划、冷启动、断线或硬超时时使用的本地低阶大脑，不与远程 Agent 平级争夺长期战略。 | §4.5、§7 |
 | `ActionOutcome` / `WorldEvent` | 动作结果与重要环境变化的结构化反馈，使 Agent 知道计划成功、失败或被快脑覆盖。 | §6.2 |
 
-图的前半段是 Java 实时闭环：世界提交后生成敌人的私有感知，快脑把 intent 展开为原子动作；
-cooldown 到期时至多执行一个动作，然后经过 `EntityManager` 的提交屏障统一刷新世界。整个闭环
-只读取本地状态，不访问 socket，也不等待模型。
+图的前半段是 Java 实时闭环：`PerceptionSystem` 从已提交世界生成两种不同用途的私有视图。
+`ObservationEnvelope` 更新慢脑的 latest snapshot，但只有满足事件、计划低水位或 heartbeat 等
+调度条件时才进入 outbound queue；已有 in-flight 时只合并最新值，不制造并发请求。
+`ReflexObservation` 则在 cooldown 到期、即将选择动作时提供给 Java 快脑。快脑至多执行一个动作，
+然后经过 `EntityManager` 的提交屏障统一刷新世界。整个闭环只读取本地状态，不访问 socket，
+也不等待模型。
 
 异步链路通过两个有界队列与游戏线程隔离。`AgentSession` 负责 IO、重连和请求期限；Python
 慢脑只返回战略 intent，不直接操作世界。返回值依次经过 `DecisionValidator` 和 `IntentLease`，
@@ -331,7 +341,7 @@ runId + floorId + agentId + sessionEpoch
 
 ### 2.9 延迟相关 trace 与验收门槛
 
-必须记录但不进入 deterministic golden 的诊断字段：`queueDelayMs`、`transportMs`、`inferenceMs`、`totalLatencyMs`。canonical trace 使用逻辑 tick 和离散事件：
+必须记录但不进入 deterministic canonical evidence 的诊断字段：`queueDelayMs`、`transportMs`、`inferenceMs`、`totalLatencyMs`。canonical trace 使用逻辑 tick 和离散事件：
 
 - `AGENT_REQUEST_SENT`
 - `AGENT_SLOW`
@@ -462,12 +472,14 @@ Phase 2 先用 deterministic fake runtime 验证上述基础设施；Phase 3 接
 | `action_feedback` | 一个 action 执行完成后 | 原始 intent 的 decisionId、action 序号、ActionResult、当前位置、HP 变化 | 2（Phase 4 时 Agent 利用此反馈重规划） |
 | `world_event` | 检测到有意义的世界事件 | 事件类型（PLAYER_SPOTTED / SOUND_HEARD / ATTACKED / PLAN_COMPLETED / PLAN_BLOCKED / ALLY_MESSAGE）、相关数据 | 2 定义类型，Phase 4+ 触发 |
 | `heartbeat` | 定期（可配置） | 当前 turn 号 | 2 |
+| `cancel_request` | hard timeout、关键前提失效或 Session 关闭 | 被取消 request 的 decisionId、requestGeneration 和 reason | 2 |
 
 **Agent → Java（上行）**：
 
 | type | 触发时机 | data 内容 | Phase |
 |------|----------|-----------|-------|
-| `submit_intent` | Agent 做出决策 | decisionId、observationSeq、goal、strategy、targetPosition、confidence | 2 |
+| `submit_intent` | Agent 做出决策 | decisionId、observationSeq、版本化 skill proposal、validity、interruptPolicy | 2 |
+| `cancel_ack` | Agent runtime 已停止对应推理 | 被取消 request 的 decisionId、requestGeneration | 2 |
 | `cancel_intent` | Agent 想中止当前计划 | 要取消的 decisionId | 4 |
 | `tool_call` | Agent 需要查询信息（Phase 3） | tool 名称、参数 | 3 |
 
@@ -508,7 +520,9 @@ Java                                  Agent（Python）
  │                            (Agent 重新推理...)
 ```
 
-Phase 2 只需要实现 `observation` → `submit_intent` → `action_feedback` 这个最小闭环。其他消息类型定义好 schema，Phase 3/4 再接入。
+Phase 2 实现 `observation` → `submit_intent` → `action_feedback` 的最小决策闭环，以及
+`cancel_request` → `cancel_ack` 的请求取消握手。Tool Calling、`cancel_intent` 和完整
+world event 消费在 Phase 3/4 接入；精确 Phase 2 schema 见 `PHASE_2_SPEC.md` §8。
 
 ---
 
@@ -702,8 +716,8 @@ public interface AgentHandler {
 
 Phase 2 的 `AgentSession` 实现：
 - TCP 连接 + NDJSON 解析
-- `pollInbound()` 只处理 `submit_intent` 消息
-- `sendObservation()` / `sendActionFeedback()` 发送对应消息
+- `pollInbound()` 处理 `submit_intent` 和 `cancel_ack` 消息
+- `sendObservation()` / `sendActionFeedback()` / `sendCancelRequest()` 发送对应消息
 - 独立 IO loop + 有界收发队列 + 软/硬超时 + 重连状态
 
 Phase 3+ 新增：
@@ -728,7 +742,7 @@ Phase 3+ 新增：
   "agentId": "guard-a",
   "sessionEpoch": 3,
   "logicalTick": 42,
-  "type": "observation | action_feedback | world_event | heartbeat | submit_intent | cancel_intent | tool_call | tool_result",
+  "type": "observation | action_feedback | world_event | heartbeat | cancel_request | submit_intent | cancel_ack | cancel_intent | tool_call | tool_result",
   "data": { ... }
 }
 ```
@@ -803,11 +817,12 @@ wall-clock timestamp 和毫秒耗时只能放入非 canonical diagnostics，不�
     "observationSeq": 5,
     "requestGeneration": 2,
     "intent": {
-      "goal": "CHASE",
-      "strategy": "CHASE",
-      "targetPosition": {"x": 3, "y": 2},
+      "intentVersion": "strategic-intent.v1",
+      "skill": "CHASE",
+      "parameters": {
+        "targetPosition": {"x": 3, "y": 2}
+      },
       "confidence": 0.8,
-      "targetRoom": -1,
       "validForTicks": 20,
       "interruptPolicy": {
         "engageVisiblePlayer": true,
@@ -819,7 +834,14 @@ wall-clock timestamp 和毫秒耗时只能放入非 canonical diagnostics，不�
 }
 ```
 
-Java 必须限制 `validForTicks` 的最大值，并校验 `interruptPolicy`；缺失时使用与 goal/strategy 对应的安全默认值，不能让 Agent 通过该字段绕过 P0 世界规则。
+Java 必须限制 `validForTicks` 的最大值，按 `skill` 白名单校验 parameters 和
+`interruptPolicy`；缺失策略时使用该 skill 的安全默认值，不能让 Agent 通过这些字段绕过 P0
+世界规则。Phase 2 的精确白名单和字段约束见 `PHASE_2_SPEC.md` §8.9；Phase 3 再通过 Skill
+Registry 扩展能力。
+
+`cancel_request` / `cancel_ack` 的精确 Phase 2 schema 与 generation 匹配规则见
+`PHASE_2_SPEC.md` §8.7、§8.10。它们取消尚未完成的推理请求，不等同于下面 Phase 4 的
+`cancel_intent`。
 
 **cancel_intent**（Phase 4+）：
 
@@ -951,10 +973,44 @@ Phase 4 接入执行反馈和事件驱动重规划时：
 
 ---
 
-## 附录：与当前 Phase 2 Spec 的差异对照
+## 12. 当前架构的已知缺憾与后续补强
 
-| 主题 | Phase 2 Spec（当前） | 本文档（目标） |
-|------|---------------------|---------------|
+本方案已经确定了 Java 权威、双速大脑、非阻塞通信、时效校验和反馈闭环，但它仍是一个
+**可扩展骨架**，不是完整复杂战术系统。下列问题必须显式保留在设计债务清单中，不能因为主流程图
+已经连通就视为解决。
+
+| 当前缺憾 | 影响 | 补强要求 | Roadmap 时点 |
+|----------|------|----------|----------------|
+| 超时状态只有三组正交状态和文字规则，没有完整的“状态 × 事件 → 新状态/副作用”转换表 | soft timeout、hard timeout、cancel、断线和迟到响应可能在实现中产生互相矛盾的分支 | Phase 2 Spec 必须列出转换表，并锁定 generation 递增、请求释放、Session 重建和迟到消息处理 | Phase 2 |
+| queue 与背压只有原则，没有固定容量、消息优先级、合并键和溢出结果 | 高延迟或 Python 停止读取时，可能丢失关键反馈、积压内存或重新阻塞游戏线程 | 为 inbound/outbound/pendingEvents 分别定义容量、可丢弃类型、不可静默丢失类型和 trace | Phase 2 |
+| `AgentSession` 的线程所有权和关闭次序尚未形式化 | 楼层切换、Enemy 死亡、重连和游戏退出时可能出现旧 IO 回调、线程泄漏或跨 session 污染 | 明确创建者、唯一写入线程、close/cancel handshake、join 上限和 `sessionEpoch` 切换点 | Phase 2 |
+| `DecisionValidator` 的身份校验已定义，但“语义过时”的机器可判定前提仍不完整 | 身份字段都匹配的旧 PATROL、CHASE 或目标位置仍可能与当前世界事实冲突 | 最小阶段使用 lease TTL、当前 FOV 和目标可达性；后续为 intent/skill 增加受约束前提与失效原因，禁止执行任意模型表达式 | Phase 2–4 |
+| Phase 2 的版本化 `skill + parameters + validity + interruptPolicy` 仍只表达单个受限 skill | 尚不能稳定表达条件行为、序列子目标、备用方案和完整战术参数 | 在保持版本化与白名单校验的前提下增加 plan metadata 和 Skill Registry，不能靠不断添加零散可选字段维持 | Phase 3 |
+| `ClassicalPlanner.translate()` 被视为执行入口，但技能注册、参数 schema、能力查询和失败分类尚未定义 | 每新增伏击、绕后、守门等战术都可能继续扩大枚举和 `switch`，最终把复杂性重新塞回 Enemy | 建立 Skill Registry/Tactical Executor seam；每个 skill 声明参数、前提、终止条件、允许的局部修正和标准失败原因 | Phase 3 |
+| 当前只有单个 `IntentLease`，没有正式的多步骤计划模型 | `planId`、`stepId`、步骤反馈、暂停/恢复、分支与整体重规划的关系不明确 | 引入有界计划契约；Java 只执行受支持的步骤和条件，不接受任意脚本或模型生成代码 | Phase 4 |
+| 每敌人单 in-flight 只能限制单体请求，不能限制整个遭遇的模型并发 | 敌人数增加时仍可能同时产生大量 LLM 调用，造成延迟、成本和限流雪崩 | 增加全局推理调度器、并发/队列/调用预算和优先级；调度器不得合并 Agent 私有上下文 | Phase 3、6 |
+| 多 Agent 目前只有 `ALLY_MESSAGE`/`world_event` 入口，没有角色协商和协作协议 | 可以传播“看见玩家”，但难以可靠表达谁牵制、谁截击、协作何时过期或失败 | 通过可被阻断的世界内消息增加 `coordinationId`、提议/确认、角色和有效期；每个 Agent 独立形成自己的 `RoleIntent` | Phase 5 |
+| 每 Agent 一条持久 TCP 连接的规模上限尚未验证 | 少量守卫合理，但大量敌人时连接、线程、序列化和 trace 成本可能成为瓶颈 | 用完整遭遇测量并发、队列、连接和 token 指标；需要复用传输时只能复用连接/模型服务，不能共享意识或上下文 | Phase 3、6 |
+| 复杂战术尚无玩家可见性和可反制性的统一验收 | 技术上能执行战术不代表玩家能理解、欺骗或打断它 | 每个新增战术必须有固定场景、trace 因果链、玩家识别信号和至少一种反制路径，并与规则基线比较 | Phase 6–7 |
+
+这些缺憾不要求 Phase 2 提前实现完整战术库。Phase 2 必须闭合的是并发、时效、背压、Session
+生命周期和最小语义失效规则；Phase 3–5 在不改变通信骨架和 Java 权威的前提下逐层扩展
+intent、skill、plan 与世界内协作。任何补强都不得采用以下捷径：
+
+- 让模型直接提交原子动作或修改世界；
+- 用任意脚本、任意条件表达式绕过 Java validator；
+- 用共享上下文、自动队伍黑板或全知小队大脑替代世界内通信；
+- 为追求“更聪明”而取消快脑、cooldown、IntentLease 或 P0–P4 仲裁；
+- 通过增加并发请求掩盖模型延迟。
+
+---
+
+## 附录：与已被替换的旧版 Phase 2 Spec 的差异对照
+
+下表记录本架构最初否决的旧方案。当前 `PHASE_2_SPEC.md` 已按右栏重写，不再存在这些结构性差异。
+
+| 主题 | 旧版 Phase 2 Spec | 本文档与当前 Spec |
+|------|------------------|------------------|
 | 通信模型 | 请求/响应（RPC 风格） | 双向事件流（Event-driven） |
 | Java 角色 | 调用 Brain 函数（主从） | 提供能力服务（对等） |
 | 决策注入 | `consumeAsyncDecision()` 独立路径 | `pollAgentMessages()` → `onIntentSubmitted()` 回调 |

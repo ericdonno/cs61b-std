@@ -2,6 +2,8 @@ package byog.Core;
 
 import byog.Action.AttackAction;
 import byog.Action.MoveAction;
+import byog.AI.AiTickContext;
+import byog.AI.AiTickLoop;
 import byog.Common.Difficulty;
 import byog.Common.Direction;
 import byog.Entity.Entity;
@@ -31,6 +33,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.UUID;
 
 public class Game {
     TERenderer ter = new TERenderer();
@@ -51,6 +54,10 @@ public class Game {
 
     private Difficulty difficulty;
     private GameConfig gameConfig;
+    /** Phase 2 production identity. Not used by playWithInputString(). */
+    private String runId;
+    private long logicalTick = 0;
+    private boolean phase2ProductionRuntime;
 
     // 游戏状态枚举
     private enum GameState {
@@ -71,6 +78,9 @@ public class Game {
      */
     public void playWithKeyboard() {
         // 初始化
+        phase2ProductionRuntime = true;
+        runId = null;
+        logicalTick = 0;
         ter.initialize(WIDTH, WINDOW_HEIGHT);
         entityMgr = new EntityManager();
         player = null;
@@ -81,59 +91,71 @@ public class Game {
         StringBuilder seedStr = new StringBuilder();
 
         // 主循环
-        while (currentState != GameState.QUIT) {
-            frameCounter++;
+        try {
+            while (currentState != GameState.QUIT) {
+                frameCounter++;
 
-            // 处理键盘输入
-            if (StdDraw.hasNextKeyTyped()) {
-                char c = Character.toLowerCase(StdDraw.nextKeyTyped());
-                currentState = processInput(currentState, c, seedStr);
-            }
+                // 处理键盘输入
+                if (StdDraw.hasNextKeyTyped()) {
+                    char c = Character.toLowerCase(StdDraw.nextKeyTyped());
+                    currentState = processInput(currentState, c, seedStr);
+                }
 
-            // 处理鼠标点击暂停按钮（边沿检测）
-            boolean mousePressed = StdDraw.isMousePressed();
-            if (mousePressed && !mouseWasPressed) {
-                double mx = StdDraw.mouseX();
-                double my = StdDraw.mouseY();
-                if (isInsidePauseButton(mx, my)) {
-                    if (currentState == GameState.PLAYING) {
+                // 处理鼠标点击暂停按钮（边沿检测）
+                boolean mousePressed = StdDraw.isMousePressed();
+                if (mousePressed && !mouseWasPressed) {
+                    double mx = StdDraw.mouseX();
+                    double my = StdDraw.mouseY();
+                    if (isInsidePauseButton(mx, my)) {
+                        if (currentState == GameState.PLAYING) {
+                            currentState = GameState.PAUSED;
+                        } else if (currentState == GameState.PAUSED) {
+                            currentState = GameState.PLAYING;
+                        }
+                    }
+                }
+                mouseWasPressed = mousePressed;
+
+                if (currentState == GameState.PLAYING) {
+                    runPhase2PlayingTick();
+
+                    // 检测玩家死亡
+                    if (player != null && !player.isAlive()) {
                         currentState = GameState.PAUSED;
-                    } else if (currentState == GameState.PAUSED) {
-                        currentState = GameState.PLAYING;
+                        Logger.info("Player died!");
                     }
                 }
+
+                // 绘制
+                draw(currentState, seedStr.toString());
+
+                StdDraw.show();
+                StdDraw.pause(16);
             }
-            mouseWasPressed = mousePressed;
-
-            if (currentState == GameState.PLAYING) {
-                // 更新玩家蓄力
-                if (player != null) {
-                    player.updateCharge();
-                    player.updateHitTimer();
-                }
-
-                // Enemies AI tick
-                for (Entity e : entityMgr.getAllEntities()) {
-                    if (e instanceof Enemy enemy && e.isAlive()) {
-                        enemy.updateAI(world, entityMgr, player);
-                    }
-                }
-                entityMgr.flushPendingChanges();
-                entityMgr.removeDeadEntities();
-
-                // 检测玩家死亡
-                if (player != null && !player.isAlive()) {
-                    currentState = GameState.PAUSED;
-                    Logger.info("Player died!");
-                }
-            }
-
-            // 绘制
-            draw(currentState, seedStr.toString());
-
-            StdDraw.show();
-            StdDraw.pause(16);
+        } finally {
+            closeAllEnemyRuntimes();
+            phase2ProductionRuntime = false;
         }
+    }
+
+    /**
+     * Production-only Phase 2 scheduler. Every enemy completes the same phase
+     * before the shared world commit barrier is crossed.
+     */
+    private void runPhase2PlayingTick() {
+        if (player != null) {
+            player.updateCharge();
+            player.updateHitTimer();
+        }
+        if (world == null || entityMgr == null || player == null) {
+            return;
+        }
+        ensureRunIdentity();
+
+        AiTickContext context =
+                new AiTickContext(runId, floorLevel, logicalTick);
+        AiTickLoop.run(context, world, entityMgr, player);
+        logicalTick++;
     }
 
     /**
@@ -204,6 +226,9 @@ public class Game {
                         addEntity(e);
                     }
                     placeStairs(result, player.getPosition(), floorLevel);
+                    if (phase2ProductionRuntime) {
+                        beginPhase2Run();
+                    }
 
                     Logger.section("Game started (new game) - " + difficulty.getKey() + ".");
                     return GameState.PLAYING;
@@ -413,6 +438,8 @@ public class Game {
      * @return the 2D TETile[][] representing the state of the world
      */
     public TETile[][] playWithInputString(String input) {
+        // Legacy API: intentionally does not start the Phase 2 runtime.
+        phase2ProductionRuntime = false;
         // 初始化世界和实体
         entityMgr = new EntityManager();
         player = null;
@@ -627,6 +654,9 @@ public class Game {
 
     /** 进入下一层：楼层+1、重新生成世界、重生玩家和敌人、放置传送门。 */
     private void nextFloor() {
+        if (phase2ProductionRuntime) {
+            closeAllEnemyRuntimes();
+        }
         floorLevel++;
         Logger.section("Entering Floor " + floorLevel);
 
@@ -641,6 +671,9 @@ public class Game {
         }
 
         placeStairs(result, player.getPosition(), floorLevel);
+        if (phase2ProductionRuntime) {
+            primeEnemyObservations();
+        }
         frameCounter = 0;
         attackFrame = -1;
     }
@@ -749,6 +782,7 @@ public class Game {
                     }
                     Enemy enemy = new Enemy(new Position(s.x, s.y), Tileset.ENEMY,
                             s.hp, s.sightRange, mvInterval, atk, atkVariance, random, agentId);
+                    enemy.setPerceptionEnabled(true);
                     e = enemy;
                 } else {
                     continue;
@@ -765,7 +799,66 @@ public class Game {
             placeStairs(result, player.getPosition(), floorLevel);
         }
 
+        if (phase2ProductionRuntime) {
+            beginPhase2Run();
+        }
+
         Logger.info("Game loaded successfully.");
         return true;
+    }
+
+    private void beginPhase2Run() {
+        runId = "run-" + UUID.randomUUID();
+        logicalTick = 0;
+        primeEnemyObservations();
+    }
+
+    /**
+     * Cold-start observations are created only after the initial world has
+     * been fully assembled. This preserves moveInterval==1 cadence without
+     * allowing executeOneAction to read a live Player reference.
+     */
+    private void primeEnemyObservations() {
+        if (world == null || entityMgr == null || player == null) {
+            return;
+        }
+        ensureRunIdentity();
+        entityMgr.flushPendingChanges();
+        entityMgr.removeDeadEntities();
+        AiTickContext context =
+                new AiTickContext(runId, floorLevel, logicalTick);
+        for (Enemy enemy : snapshotEnemies()) {
+            if (enemy.isAlive()) {
+                enemy.collectAgentUpdates(
+                        context, world, entityMgr, player);
+            }
+        }
+    }
+
+    private List<Enemy> snapshotEnemies() {
+        if (entityMgr == null) {
+            return new ArrayList<>();
+        }
+        return AiTickLoop.snapshot(entityMgr);
+    }
+
+    private void closeAllEnemyRuntimes() {
+        for (Enemy enemy : snapshotEnemies()) {
+            enemy.closeAgentRuntime();
+        }
+    }
+
+    private void ensureRunIdentity() {
+        if (runId == null || runId.isEmpty()) {
+            runId = "run-" + UUID.randomUUID();
+        }
+    }
+
+    public String getRunId() {
+        return runId;
+    }
+
+    public long getLogicalTick() {
+        return logicalTick;
     }
 }

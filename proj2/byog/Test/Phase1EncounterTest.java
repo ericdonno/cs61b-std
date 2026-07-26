@@ -10,11 +10,6 @@ import byog.lab5.Position;
 
 import org.junit.Test;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.List;
 import java.util.Random;
 
@@ -197,21 +192,16 @@ public class Phase1EncounterTest {
 
     // ────────── P1-T08 ──────────
 
-    /** P1-T08：Phase 1 私有感知的 golden baseline 字节级匹配 */
+    /** P1-T08：相同私有感知场景必须确定，但不锁死某份旧动作轨迹。 */
     @Test
-    public void phase1RuleBaselineMatchesGolden() throws IOException {
-        Path goldenPath = Paths.get("documents", "baselines",
-                "phase1_rule_baseline_v1.json");
-
-        assertTrue("baseline file must exist at " + goldenPath.toAbsolutePath(),
-                Files.exists(goldenPath));
-
-        Phase1EncounterHarness harness = Phase1EncounterHarness.baselineTwoGuardsV1();
-        harness.runTicks(12);
-
-        String golden = Files.readString(goldenPath, StandardCharsets.UTF_8);
-        String expected = harness.buildBaselineJson();
-
-        assertEquals("canonical baseline must match golden", golden, expected);
+    public void privatePerceptionScenarioIsDeterministic() {
+        Phase1EncounterHarness first =
+                Phase1EncounterHarness.baselineTwoGuardsV1();
+        Phase1EncounterHarness second =
+                Phase1EncounterHarness.baselineTwoGuardsV1();
+        first.runTicks(12);
+        second.runTicks(12);
+        assertEquals(first.canonicalTraceJson(), second.canonicalTraceJson());
+        assertEquals(first.canonicalState(), second.canonicalState());
     }
 }

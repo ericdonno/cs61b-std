@@ -119,11 +119,46 @@
 
 ## 11. 测试与验收矩阵
 
+测试代码默认是供 Agent 和 CI 执行的可执行契约，不是面向 Builder 的教程。优先保证入口少、失败可定位、
+fixture 可复用和运行结果确定；不要用大量注释、镜像 harness 或层层嵌套 Suite 增加上下文成本。
+
+### 11.1 测试架构摘要
+
+先明确以下结构：
+
+| 项目 | 本阶段决定 |
+|------|------------|
+| 单一 deterministic 入口 | 一个 Suite/命令；只列 leaf test class，每个测试恰好运行一次 |
+| integration 入口 | 与 deterministic Suite 分离；允许的进程、网络和有界等待 |
+| shared fixture/harness | 每个场景族最多一个权威 parser、clock 和 tick coordinator |
+| production seam | Game 与 harness 复用的真实调度入口；禁止测试复制生产 loop 或用反射访问私有方法 |
+| golden/canonical artifact | 只用于稳定 schema、wire format 或人工审计证据 |
+| 排除项 | 不确定、交互式、性能或历史测试放在哪个独立入口 |
+
+强制约束：
+
+- 禁止 Suite 嵌套造成重复运行；聚合 Suite 直接列 leaf test class。
+- deterministic test 禁止真实网络、默认存档、GUI 和 `Thread.sleep()`。
+- 默认 Agent gate 的 stdout 必须简洁；成功时压制生产 DEBUG/INFO 噪声，失败信息自身应足够定位。
+- integration test 必须有总超时、进程清理和可定位的阶段状态。
+- gameplay、调度和随机路径优先断言不变量，不使用完整逐步行为 golden。
+- 只有对外 schema、codec 或确需字节兼容的格式才允许 byte-for-byte golden。
+- 历史 baseline 可以保留为 evidence，但除非兼容性本身是产品需求，不得阻止生产架构演进。
+- 测试不得在普通运行中生成或覆盖 golden。
+- Test ID 必须出现在测试名、失败消息或机器可检索注释中，以便 Agent 从失败直接回到 Spec。
+- 共享 harness 只控制输入、时钟和故障注入；不得重新实现 Brain、Planner、规则或提交顺序。
+- 测试辅助代码出现第二份 parser、tick loop、协议 builder 或场景镜像时，必须先提取共享 fixture。
+
+### 11.2 验收矩阵
+
 | Test ID | 场景 | 断言 | 自动/人工 | 对应需求 |
 |---------|------|------|-----------|----------|
 | | | | | |
 
 测试必须覆盖正常路径、边界、失败路径和“不应发生”的行为。对随机或 LLM 行为，区分 deterministic contract test 与统计/人工评估。
+
+矩阵描述契约，不要求“每行一个测试类”。允许一个紧凑测试覆盖同一状态转换的多个字段，但失败必须能定位到
+对应 Test ID。禁止为了让测试数量看起来完整而复制同一场景。
 
 ## 12. Observability 与运行证据
 
@@ -153,6 +188,10 @@
 
 - [ ] 所有 In Scope 交付物存在。
 - [ ] 指定自动化测试通过。
+- [ ] 单一 deterministic 入口运行的测试无 Suite 嵌套和重复计数。
+- [ ] 默认 Agent gate 成功输出简洁，不向上下文灌入生产 DEBUG/INFO 日志。
+- [ ] 测试复用生产调度 seam，没有反射或测试专用规则副本。
+- [ ] gameplay 行为没有被不必要的完整轨迹 golden 锁死。
 - [ ] 固定场景或人工验收通过。
 - [ ] 没有违反对应 INV 约束。
 - [ ] 运行命令与结果已记录。
@@ -178,4 +217,7 @@
 - [ ] 我引用了关键代码位置。
 - [ ] 我没有提前实现后续 Phase 的系统。
 - [ ] 我为每个完成条件提供了可执行的验证方法。
+- [ ] 我定义了一个无重复的 Agent 默认测试入口。
+- [ ] 我检查了 harness、parser、clock 和协议 builder 是否重复。
+- [ ] 我只为稳定外部格式使用 byte-for-byte golden。
 - [ ] 我检查了本阶段输出能否被下一名 AI 独立理解。

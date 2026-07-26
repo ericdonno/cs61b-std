@@ -70,10 +70,10 @@ byog/
 │   ├── BFSPathfinder.java
 │   └── GameStateSnapshot.java
 └── Test/          # 测试模块
-    ├── Phase0TestSuite.java
+    ├── Phase2TestSuite.java
+    ├── EncounterHarness.java
     ├── Phase0EncounterTest.java
-    ├── Phase0EncounterHarness.java
-    └── MathTest.java
+    └── Phase2AiTickTest.java
 ```
 
 ### 包职责说明
@@ -89,7 +89,7 @@ byog/
 | `Action` | 动作定义与执行 | Action, MoveAction, AttackAction |
 | `Entity` | 实体定义与管理 | Entity, Player, Enemy, EntityManager |
 | `AI` | AI 决策与规划 | EnemyBrain, ClassicalPlanner, BFSPathfinder |
-| `Test` | 单元测试与集成测试 | Phase0TestSuite, MathTest |
+| `Test` | Agent/CI 契约测试；deterministic leaf suite 与 integration 分离 | Phase2TestSuite, EncounterHarness |
 
 ### 依赖关系
 
