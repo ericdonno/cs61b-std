@@ -15,7 +15,7 @@ public interface EnemyBrain {
     StrategicIntent think(GameStateSnapshot state);
 
     /**
-     * 基于私有 ObservationEnvelope 做决策。Phase 1+ 使用。
+     * 基于私有 ObservationEnvelope 做决策。
      * 默认抛出 UnsupportedOperationException，子类按需覆写。
      */
     default StrategicIntent thinkFromObservation(ObservationEnvelope obs) {

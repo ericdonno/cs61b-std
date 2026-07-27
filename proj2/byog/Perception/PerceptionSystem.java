@@ -146,7 +146,7 @@ public final class PerceptionSystem {
             }
         }
 
-        // 第四步：构造不可变快照；构造器只读取 world 来固化 walkableMask，不保存引用
+        // 第四步：构造不可变的 ObservationEnvelope 返回，传入 world 引用供 isWalkable 查询
         return new ObservationEnvelope(runId, floorId, self.getAgentId(),
                 observationSeq, currentTurn,
                 selfPos, self.getHp(),

@@ -7,7 +7,7 @@ import java.util.Queue;
 /**
  * Cross-tick action buffer with explicit low/high-water marks.
  *
- * <p>Phase 2 production code uses {@link #replaceWithBoundedPrefix(List)} and
+ * <p>The interactive agent runtime uses {@link #replaceWithBoundedPrefix(List)} and
  * {@link #appendBounded(List)}. The older enqueue methods remain as compatible
  * bounded aliases.</p>
  */

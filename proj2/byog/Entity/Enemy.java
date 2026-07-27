@@ -6,8 +6,12 @@ import byog.Action.ActionQueue;
 import byog.AI.AiTickContext;
 import byog.AI.BFSPathfinder;
 import byog.AI.ClassicalPlanner;
+import byog.AI.DecisionValidator;
 import byog.AI.EnemyBrain;
 import byog.AI.GameStateSnapshot;
+import byog.AI.IntentArbiter;
+import byog.AI.IntentLease;
+import byog.AI.ReflexController;
 import byog.AI.ReflexObservation;
 import byog.AI.RuleBasedBrain;
 import byog.AI.StrategicIntent;
@@ -52,8 +56,12 @@ public class Enemy extends Entity {
     /** 最近一个已经在 commit 后完成的动作结果。 */
     private ActionOutcome lastActionOutcome;
     private String currentDecisionId;
+    private String queuedDecisionId;
+    private AgentProtocol.DecisionSource currentDecisionSource;
     private int actionsExecutedForDecision;
     private boolean agentRuntimeClosed;
+    private final IntentArbiter arbiter;
+    private final ReflexController reflexController;
 
     public Enemy(Position position, TETile tile, int hp, int sightRange,
                  int moveInterval, int attackDamage, int damageVariance,
@@ -72,6 +80,8 @@ public class Enemy extends Entity {
         this.perceptionEnabled = false;
         this.observationSeq = 0;
         this.agentRuntimeClosed = false;
+        this.arbiter = new IntentArbiter();
+        this.reflexController = new ReflexController();
     }
 
     /**
@@ -91,8 +101,8 @@ public class Enemy extends Entity {
      */
     public void updateAI(TETile[][] world, EntityManager entityMgr, Player player,
                          AgentTrace.Context traceContext, AgentTrace.Sink traceSink) {
-        // Legacy Phase 0/1 harness seam.
-        // Production Game must not add new Phase 2 logic here.
+        // Legacy encounter-harness seam.
+        // Production Game must not add new agent-runtime logic here.
         tickCounter++;
         // 每个动作（每隔moveInterval）评估当前局势
         if (tickCounter >= moveInterval) {
@@ -219,8 +229,8 @@ public class Enemy extends Entity {
     }
 
     /**
-     * Phase 2 production stage 1. Step 2.2 has no AgentSession yet, so this is
-     * deliberately a non-blocking no-op.
+     * Production polling stage. Without an AgentSession this is deliberately
+     * a non-blocking no-op.
      */
     public void pollAgentMessages(AiTickContext context) {
         if (agentRuntimeClosed) {
@@ -232,8 +242,8 @@ public class Enemy extends Entity {
     }
 
     /**
-     * Phase 2 production stage 2. At most one action is attempted whenever the
-     * original cooldown becomes due.
+     * Production execution stage. At most one action is attempted whenever the
+     * original cooldown becomes due. Uses IntentArbiter for P0-P4 priority.
      */
     public void executeOneAction(AiTickContext context,
                                  TETile[][] world,
@@ -250,7 +260,7 @@ public class Enemy extends Entity {
                     "collectAgentUpdates must complete before the next execute");
         }
 
-        // Preserve the Phase 1 cooldown order: increment first, then compare.
+        // Preserve the established cooldown order: increment first, then compare.
         tickCounter++;
         if (tickCounter < moveInterval) {
             return;
@@ -263,30 +273,108 @@ public class Enemy extends Entity {
             return;
         }
 
-        StrategicIntent intent = brain.thinkFromObservation(latestObservation);
-        StrategicIntent.Strategy newStrategy = intent.getStrategy();
-        boolean strategyChanged = newStrategy != currentStrategy;
+        ReflexObservation reflex = latestReflexObservation;
+        boolean overrideWasActive = arbiter.isInReflexOverride();
+        IntentArbiter.ArbiterDecision decision =
+                arbiter.decide(reflex, context.getLogicalTick());
+        Action action = null;
+        String overrideReason = null;
+        AgentProtocol.DecisionSource source = AgentProtocol.DecisionSource.LOCAL_FALLBACK;
+        String decisionId = currentDecisionId;
 
-        if (strategyChanged) {
-            Logger.info("Enemy#%d Strategy: %s → %s",
-                    this.getId(), currentStrategy, newStrategy);
-            currentStrategy = newStrategy;
-            startLocalDecision(context);
-            List<Action> actions = ClassicalPlanner.translateBounded(
-                    intent, getPosition(), getId(), world, entityMgr, random,
-                    actionQueue.getHighWater());
-            actionQueue.replaceWithBoundedPrefix(actions);
-        } else if (actionQueue.needRefill()) {
-            if (currentDecisionId == null) {
-                startLocalDecision(context);
+        switch (decision.getLevel()) {
+            case P1_REFLEX: {
+                StrategicIntent reflexIntent =
+                        reflexController.createAdjacentAttackIntent(reflex);
+                action = planSingleAction(
+                        reflexIntent, world, entityMgr);
+                overrideReason = arbiter.getOverrideReason();
+                IntentLease lease = arbiter.getCurrentLease();
+                if (lease != null
+                        && lease.isValidAt(context.getLogicalTick())) {
+                    source = lease.getDecisionSource();
+                    decisionId = lease.getDecisionId();
+                    selectDecision(decisionId, source);
+                } else {
+                    if (!overrideWasActive
+                            || currentDecisionId == null
+                            || currentDecisionSource
+                            != AgentProtocol.DecisionSource.LOCAL_FALLBACK) {
+                        startLocalDecision(context);
+                    }
+                    decisionId = currentDecisionId;
+                }
+                break;
             }
-            List<Action> actions = ClassicalPlanner.translateBounded(
-                    intent, getPosition(), getId(), world, entityMgr, random,
-                    actionQueue.remainingCapacity());
-            actionQueue.appendBounded(actions);
+            case P2_REFLEX: {
+                StrategicIntent reflexIntent =
+                        reflexController.createEngageIntent(reflex);
+                action = planSingleAction(
+                        reflexIntent, world, entityMgr);
+                overrideReason = arbiter.getOverrideReason();
+                IntentLease lease = arbiter.getCurrentLease();
+                if (lease != null
+                        && lease.isValidAt(context.getLogicalTick())) {
+                    source = lease.getDecisionSource();
+                    decisionId = lease.getDecisionId();
+                    selectDecision(decisionId, source);
+                } else {
+                    if (!overrideWasActive
+                            || currentDecisionId == null
+                            || currentDecisionSource
+                            != AgentProtocol.DecisionSource.LOCAL_FALLBACK) {
+                        startLocalDecision(context);
+                    }
+                    decisionId = currentDecisionId;
+                }
+                break;
+            }
+            case P3_LEASE: {
+                IntentLease lease = arbiter.getCurrentLease();
+                StrategicIntent leaseIntent = lease.getIntent();
+
+                if (!lease.getDecisionId().equals(queuedDecisionId)) {
+                    currentStrategy = leaseIntent.getStrategy();
+                    List<Action> actions = ClassicalPlanner.translateBounded(
+                            leaseIntent, getPosition(), getId(), world,
+                            entityMgr, random, actionQueue.getHighWater());
+                    actionQueue.replaceWithBoundedPrefix(actions);
+                    queuedDecisionId = lease.getDecisionId();
+                } else if (actionQueue.needRefill()) {
+                    List<Action> actions = ClassicalPlanner.translateBounded(
+                            leaseIntent, getPosition(), getId(), world,
+                            entityMgr, random, actionQueue.remainingCapacity());
+                    actionQueue.appendBounded(actions);
+                }
+
+                action = actionQueue.poll();
+                source = lease.getDecisionSource();
+                decisionId = lease.getDecisionId();
+                selectDecision(decisionId, source);
+                break;
+            }
+            case P4_LOCAL_FALLBACK: {
+                StrategicIntent intent = brain.thinkFromObservation(latestObservation);
+                currentStrategy = intent.getStrategy();
+                startLocalDecision(context);
+                arbiter.adoptLocalFallbackLease(intent, currentDecisionId,
+                        latestObservation.getObservationSeq(),
+                        context.getLogicalTick(), 30);
+                List<Action> actions = ClassicalPlanner.translateBounded(
+                        intent, getPosition(), getId(), world,
+                        entityMgr, random, actionQueue.getHighWater());
+                actionQueue.replaceWithBoundedPrefix(actions);
+                queuedDecisionId = currentDecisionId;
+
+                action = actionQueue.poll();
+                source = AgentProtocol.DecisionSource.LOCAL_FALLBACK;
+                decisionId = currentDecisionId;
+                break;
+            }
+            default:
+                return;
         }
 
-        Action action = actionQueue.poll();
         if (action == null) {
             return;
         }
@@ -296,14 +384,14 @@ public class Enemy extends Entity {
         actionsExecutedForDecision++;
         pendingAction = new PendingAction(
                 context.getRunId(), context.getFloorId(),
-                context.getLogicalTick(), currentDecisionId,
+                context.getLogicalTick(), decisionId,
                 actionsExecutedForDecision, action.getClass().getSimpleName(),
-                result, before, AgentProtocol.DecisionSource.LOCAL_FALLBACK,
-                null);
+                result, before, source,
+                overrideReason);
     }
 
     /**
-     * Phase 2 production stage 4. The entity index must already reflect the
+     * Production collection stage. The entity index must already reflect the
      * action executed in stage 2.
      */
     public void collectAgentUpdates(AiTickContext context,
@@ -349,7 +437,7 @@ public class Enemy extends Entity {
     }
 
     /**
-     * Idempotent lifecycle seam. Step 2.2 owns no socket or IO thread.
+     * Idempotent lifecycle seam. The local runtime owns no socket or IO thread.
      */
     public void closeAgentRuntime() {
         if (agentRuntimeClosed) {
@@ -357,13 +445,39 @@ public class Enemy extends Entity {
         }
         agentRuntimeClosed = true;
         actionQueue.clear();
+        queuedDecisionId = null;
         pendingAction = null;
     }
 
     private void startLocalDecision(AiTickContext context) {
         currentDecisionId = "local-" + agentId + "-tick-"
                 + context.getLogicalTick();
+        currentDecisionSource = AgentProtocol.DecisionSource.LOCAL_FALLBACK;
         actionsExecutedForDecision = 0;
+    }
+
+    private void selectDecision(
+            String decisionId,
+            AgentProtocol.DecisionSource source) {
+        if (!decisionId.equals(currentDecisionId)
+                || source != currentDecisionSource) {
+            currentDecisionId = decisionId;
+            currentDecisionSource = source;
+            actionsExecutedForDecision = 0;
+        }
+    }
+
+    private Action planSingleAction(
+            StrategicIntent intent,
+            TETile[][] world,
+            EntityManager entityMgr) {
+        if (intent == null) {
+            return null;
+        }
+        List<Action> actions = ClassicalPlanner.translateBounded(
+                intent, getPosition(), getId(), world,
+                entityMgr, random, 1);
+        return actions.isEmpty() ? null : actions.get(0);
     }
 
     private static void ensureMatchingCollectContext(
@@ -409,6 +523,29 @@ public class Enemy extends Entity {
             this.decisionSource = decisionSource;
             this.overrideReason = overrideReason;
         }
+    }
+
+    /**
+     * Testing seam: validate and adopt a remote intent without AgentSession.
+     * @return ACCEPTED if the intent was adopted, otherwise the validation failure
+     */
+    public DecisionValidator.ValidationResult tryAdoptRemoteIntent(
+            AgentProtocol.SubmitIntentData proposal,
+            AgentProtocol.Envelope envelope,
+            DecisionValidator.RequestExpectation expectation,
+            TETile[][] committedWorld,
+            long currentLogicalTick) {
+        if (agentRuntimeClosed) {
+            return DecisionValidator.ValidationResult.IDENTITY_MISMATCH;
+        }
+        return arbiter.tryAdoptRemoteIntent(
+                proposal, envelope, expectation,
+                latestReflexObservation, committedWorld, currentLogicalTick);
+    }
+
+    /** 获取 Arbiter（测试用）。 */
+    public IntentArbiter getArbiter() {
+        return arbiter;
     }
 
     public int getHp() {

@@ -10,7 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Shared production coordinator for one Phase 2 AI tick.
+ * Shared production coordinator for one AI tick.
  */
 public final class AiTickLoop {
     private AiTickLoop() {

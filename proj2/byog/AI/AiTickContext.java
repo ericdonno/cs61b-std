@@ -5,7 +5,7 @@ import byog.Trace.AgentTrace;
 import java.util.Objects;
 
 /**
- * Stable identity shared by every phase of one production AI tick.
+ * Stable identity shared by every stage of one production AI tick.
  *
  * <p>The context contains no world or entity references. In particular, it
  * cannot be used to bypass the private-observation boundary.</p>

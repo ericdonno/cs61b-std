@@ -7,7 +7,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Phase 2 消息协议的纯数据容器：信封、消息 data record、身份元组、枚举。
+ * Agent 会话消息协议的纯数据容器：信封、消息 data record、身份元组、枚举。
  * 不含 socket/IO/游戏逻辑，只承载可序列化的数据结构。
  */
 public final class AgentProtocol {
@@ -34,7 +34,7 @@ public final class AgentProtocol {
         PROTOCOL_ERROR
     }
 
-    /** Phase 2 允许的远程技能白名单 */
+    /** Agent 会话允许的远程技能白名单 */
     public enum Skill {
         PATROL,
         CHASE,

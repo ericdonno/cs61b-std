@@ -54,10 +54,10 @@ public class Game {
 
     private Difficulty difficulty;
     private GameConfig gameConfig;
-    /** Phase 2 production identity. Not used by playWithInputString(). */
+    /** Interactive agent-run identity. Not used by playWithInputString(). */
     private String runId;
     private long logicalTick = 0;
-    private boolean phase2ProductionRuntime;
+    private boolean agentRuntimeEnabled;
 
     // 游戏状态枚举
     private enum GameState {
@@ -78,7 +78,7 @@ public class Game {
      */
     public void playWithKeyboard() {
         // 初始化
-        phase2ProductionRuntime = true;
+        agentRuntimeEnabled = true;
         runId = null;
         logicalTick = 0;
         ter.initialize(WIDTH, WINDOW_HEIGHT);
@@ -117,7 +117,7 @@ public class Game {
                 mouseWasPressed = mousePressed;
 
                 if (currentState == GameState.PLAYING) {
-                    runPhase2PlayingTick();
+                    runPlayingTick();
 
                     // 检测玩家死亡
                     if (player != null && !player.isAlive()) {
@@ -134,15 +134,15 @@ public class Game {
             }
         } finally {
             closeAllEnemyRuntimes();
-            phase2ProductionRuntime = false;
+            agentRuntimeEnabled = false;
         }
     }
 
     /**
-     * Production-only Phase 2 scheduler. Every enemy completes the same phase
+     * Interactive-game AI scheduler. Every enemy completes the same tick stage
      * before the shared world commit barrier is crossed.
      */
-    private void runPhase2PlayingTick() {
+    private void runPlayingTick() {
         if (player != null) {
             player.updateCharge();
             player.updateHitTimer();
@@ -226,8 +226,8 @@ public class Game {
                         addEntity(e);
                     }
                     placeStairs(result, player.getPosition(), floorLevel);
-                    if (phase2ProductionRuntime) {
-                        beginPhase2Run();
+                    if (agentRuntimeEnabled) {
+                        beginAgentRun();
                     }
 
                     Logger.section("Game started (new game) - " + difficulty.getKey() + ".");
@@ -438,8 +438,8 @@ public class Game {
      * @return the 2D TETile[][] representing the state of the world
      */
     public TETile[][] playWithInputString(String input) {
-        // Legacy API: intentionally does not start the Phase 2 runtime.
-        phase2ProductionRuntime = false;
+        // Legacy API: intentionally does not start the interactive agent runtime.
+        agentRuntimeEnabled = false;
         // 初始化世界和实体
         entityMgr = new EntityManager();
         player = null;
@@ -654,7 +654,7 @@ public class Game {
 
     /** 进入下一层：楼层+1、重新生成世界、重生玩家和敌人、放置传送门。 */
     private void nextFloor() {
-        if (phase2ProductionRuntime) {
+        if (agentRuntimeEnabled) {
             closeAllEnemyRuntimes();
         }
         floorLevel++;
@@ -671,7 +671,7 @@ public class Game {
         }
 
         placeStairs(result, player.getPosition(), floorLevel);
-        if (phase2ProductionRuntime) {
+        if (agentRuntimeEnabled) {
             primeEnemyObservations();
         }
         frameCounter = 0;
@@ -799,15 +799,15 @@ public class Game {
             placeStairs(result, player.getPosition(), floorLevel);
         }
 
-        if (phase2ProductionRuntime) {
-            beginPhase2Run();
+        if (agentRuntimeEnabled) {
+            beginAgentRun();
         }
 
         Logger.info("Game loaded successfully.");
         return true;
     }
 
-    private void beginPhase2Run() {
+    private void beginAgentRun() {
         runId = "run-" + UUID.randomUUID();
         logicalTick = 0;
         primeEnemyObservations();

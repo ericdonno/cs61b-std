@@ -21,12 +21,12 @@ import java.util.Random;
 public class ClassicalPlanner {
 
     /**
-     * Phase 2 production planner entry point. It returns only the prefix that
+     * Production planner entry point. It returns only the prefix that
      * can fit in the cross-tick action buffer.
      *
      * <p>The adjacent ATTACK case emits the atomic attack directly. The
      * legacy planner relied on same-tick retries to skip the blocked move into
-     * the player's occupied tile; the Phase 2 loop intentionally permits only
+     * the player's occupied tile; the AI tick loop intentionally permits only
      * one action attempt per cooldown.</p>
      */
     public static List<Action> translateBounded(

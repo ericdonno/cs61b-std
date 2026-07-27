@@ -3,7 +3,7 @@ package byog.Perception;
 import byog.lab5.Position;
 
 /**
- * 敌人听到的声音事件。Phase 1 只定义结构。
+ * 敌人听到的声音事件；当前仅定义数据结构。
  */
 public final class HeardEvent {
     public enum SoundType { ATTACK, MOVE, DEATH, ALERT }
