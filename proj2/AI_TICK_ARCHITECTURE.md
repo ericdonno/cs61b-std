@@ -2,9 +2,9 @@
 
 > 状态：当前实现说明
 >
-> 更新时间：2026-07-28
+> 更新时间：2026-07-31
 >
-> 范围：交互式游戏入口、Game Loop、Phase 2.2、Phase 2.3，以及下一步尚未实现的 Agent 接口
+> 范围：交互式游戏入口、Game Loop、Phase 2.2、Phase 2.3，以及已实现但尚未生产接线的 AgentSession 核心
 >
 > 不包含：`playWithInputString()` 的旧测试运行时、Tool Calling、多 Agent 协作和复杂计划系统
 
@@ -23,7 +23,8 @@
 | Reflex / Lease / Arbiter / Validator | **已实现** | 纯 Java 控制链已经参与真实游戏运行 |
 | 本地 RuleBasedBrain fallback | **已实现** | 无可用 Lease 时仍能行动 |
 | 远程 proposal 校验入口 | **接口已预留** | `tryAdoptRemoteIntent()` 可用，但当前只有测试调用 |
-| AgentSession / 队列 / TCP | **未实现** | `pollAgentMessages()` 目前不接收消息 |
+| AgentSession / 有界队列 | **核心已实现** | 已有确定性测试；`pollAgentMessages()` 尚未接线 |
+| AgentTransport 控制面 | **接口已实现** | Session 可请求重建和永久关闭；真实 TCP worker 尚未实现 |
 | Python Agent runtime | **未实现** | 不参与当前游戏行为 |
 
 读图时使用以下约定：
@@ -486,11 +487,11 @@ flowchart LR
 
 ---
 
-## 5. 尚未实现的接口与模块
+## 5. AgentSession 核心与尚未接线模块
 
 ### 5.1 模块连接图
 
-下图中的虚线全部表示规划接口，不表示当前已经运行。
+实线表示已经实现的 Session 内部关系；虚线表示生产接线或尚未实现的跨进程模块。
 
 ```mermaid
 flowchart LR
@@ -498,16 +499,18 @@ flowchart LR
     COLLECT["Enemy.collectAgentUpdates()"] -.-> SESSION
     CLOSE["Enemy.closeAgentRuntime()"] -.-> SESSION
 
-    SESSION -.-> INQ["bounded inbound queue"]
-    SESSION -.-> OUTQ["bounded outbound queue"]
-    SESSION -.-> CLOCK["MonotonicClock"]
-    SESSION -.-> HANDLER["AgentHandler"]
+    SESSION --> INQ["bounded inbound queue"]
+    SESSION --> OUTQ["bounded outbound queue"]
+    SESSION --> CLOCK["MonotonicClock"]
+    SESSION --> HANDLER["AgentHandler"]
+    SESSION --> TRANSPORT["AgentTransport<br/>生命周期控制面"]
 
-    INQ -.-> HANDLER
+    INQ --> HANDLER
     HANDLER -.-> VALIDATOR["DecisionValidator<br/>已实现"]
     VALIDATOR --> ARBITER["IntentArbiter<br/>已实现"]
 
     OUTQ -.-> IO["TCP IO worker"]
+    TRANSPORT -.-> IO
     IO -.-> TCP["persistent NDJSON TCP"]
     TCP -.-> PY["Python Agent runtime"]
     PY -.-> TCP
@@ -524,17 +527,20 @@ flowchart LR
 | `AgentProtocol` / `AgentProtocolCodec` | **已实现** | 类型化消息和 NDJSON 编解码 |
 | `DecisionValidator` | **已实现** | proposal 身份、权限、知识和世界前提校验 |
 | `IntentArbiter` / `IntentLease` | **已实现** | 采纳后的控制权与有效期 |
-| `AgentSession` | **未实现** | single in-flight、deadline、cancel、队列和生命周期 |
-| `AgentSessionConfig` | **未实现** | 地址、容量、deadline 和重连配置 |
-| `AgentHandler` | **未实现** | 把 Session 消息交给 Enemy/Validator |
-| `MonotonicClock` | **未实现** | 为 deadline 提供可测试的单调时间 |
-| inbound/outbound queues | **未实现** | 隔离游戏线程与 IO，提供背压 |
+| `AgentSession` | **核心已实现** | single in-flight、deadline、cancel、队列和生命周期 |
+| `AgentSessionConfig` | **已实现** | 地址、容量、deadline 和重连配置快照 |
+| `AgentHandler` | **已实现** | 在游戏线程接收消息，并显式返回 intent 接受/拒绝结果 |
+| `MonotonicClock` | **已实现** | 为 deadline 提供可测试的单调时间 |
+| `AgentTransport` | **接口已实现** | 绑定 endpoint、请求物理重建、永久关闭 transport |
+| inbound/outbound queues | **已实现** | 隔离游戏线程与 IO，提供有界背压 |
 | TCP IO worker | **未实现** | 唯一允许操作 Socket、Reader、Writer 的线程 |
 | Python Agent runtime | **未实现** | 消费 observation/feedback，返回受限 intent |
 
-### 5.3 计划接口
+更完整的 Session 状态机、失败语义和测试说明见 [`session.md`](session.md)。
 
-以下代码块是接口契约，不是当前源码：
+### 5.3 当前 Session API
+
+以下代码块概括当前源码的主要接口：
 
 ```java
 public final class AgentSession implements AutoCloseable {
@@ -560,7 +566,7 @@ public final class AgentSession implements AutoCloseable {
 
 ```java
 public interface AgentHandler {
-    void onIntentSubmitted(
+    IntentHandlingResult onIntentSubmitted(
             AgentProtocol.SubmitIntentData data,
             AgentProtocol.Envelope envelope,
             AgentSession.RequestContext requestContext);
@@ -571,6 +577,14 @@ public interface AgentHandler {
             AgentSession.RequestContext cancelledRequest);
 
     void onProtocolRejected(ProtocolFailure failure);
+}
+```
+
+```java
+public interface AgentTransport extends AutoCloseable {
+    void start(AgentSession.TransportEndpoint endpoint);
+    void requestRebuild();
+    void close();
 }
 ```
 
@@ -681,7 +695,9 @@ wall-clock 不能参与 canonical 正确性判断。
 8. [`DecisionValidator`](byog/AI/DecisionValidator.java)
 9. [`ActionQueue`](byog/Action/ActionQueue.java) 与
    [`ClassicalPlanner`](byog/AI/ClassicalPlanner.java)
-10. [`EntityManager.flushPendingChanges`](byog/Entity/EntityManager.java) 与
+10. [`AgentSession`](byog/Bridge/AgentSession.java) 与
+    [`session.md`](session.md)
+11. [`EntityManager.flushPendingChanges`](byog/Entity/EntityManager.java) 与
     [`PerceptionSystem.computeObservation`](byog/Perception/PerceptionSystem.java)
 
-读完第 4 项可以理解 Game Loop；读完第 8 项可以理解当前双速控制链；§5 的模块目前没有生产源码。
+读完第 4 项可以理解 Game Loop；读完第 8 项可以理解当前双速控制链；第 10 项说明已经实现但尚未接入 Game/Enemy 的 Session 核心。

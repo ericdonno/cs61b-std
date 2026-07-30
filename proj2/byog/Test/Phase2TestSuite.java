@@ -18,7 +18,8 @@ import org.junit.runners.Suite;
     Phase1EncounterTest.class,
     Phase2ProtocolTest.class,
     Phase2AiTickTest.class,
-    Phase2ArbiterTest.class
+    Phase2ArbiterTest.class,
+    AgentSessionTest.class
 })
 public final class Phase2TestSuite {
     private static Logger.Level previousLogLevel;

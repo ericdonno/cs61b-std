@@ -16,7 +16,7 @@ java "-Dfile.encoding=UTF-8" `
     org.junit.runner.JUnitCore byog.Test.Phase2TestSuite
 ```
 
-2026-07-26 的已验证基线为 `OK (58 tests)`。测试数量不是兼容 API；关键约束是所有 leaf test class 恰好执行一次。
+2026-07-31 的已验证基线为 `OK (89 tests)`。测试数量不是兼容 API；关键约束是所有 leaf test class 恰好执行一次。
 统一 Suite 会临时关闭生产 DEBUG/INFO 日志，使成功输出保持在 JUnit 摘要级别；测试结束后恢复原日志级别。
 
 `Phase2TestSuite` 当前直接列出：
@@ -27,6 +27,8 @@ java "-Dfile.encoding=UTF-8" `
 - `Phase1EncounterTest`
 - `Phase2ProtocolTest`
 - `Phase2AiTickTest`
+- `Phase2ArbiterTest`
+- `AgentSessionTest`
 
 不要恢复 `Phase0TestSuite` / `Phase1TestSuite` 的嵌套组合。跨 Python 进程的 `Phase2IntegrationTest` 使用独立命令，不混入快速 deterministic gate。
 
