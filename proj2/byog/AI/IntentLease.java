@@ -141,6 +141,9 @@ public final class IntentLease {
         }
     }
 
+    /**
+     * 防御性复制意图及其目标坐标，避免租约状态被外部对象修改。
+     */
     private static StrategicIntent copyIntent(StrategicIntent source) {
         byog.lab5.Position target = source.getTargetPosition();
         byog.lab5.Position targetCopy = target == null

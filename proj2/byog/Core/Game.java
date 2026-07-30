@@ -807,6 +807,9 @@ public class Game {
         return true;
     }
 
+    /**
+     * 创建新的运行身份、重置逻辑时钟并初始化敌人观察。
+     */
     private void beginAgentRun() {
         runId = "run-" + UUID.randomUUID();
         logicalTick = 0;

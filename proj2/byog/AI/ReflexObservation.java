@@ -34,6 +34,9 @@ public final class ReflexObservation {
         this.playerAdjacent = playerAdjacent;
     }
 
+    /**
+     * 从私有 observation 中提取反射控制所需的有限信息。
+     */
     public static ReflexObservation from(ObservationEnvelope observation) {
         Objects.requireNonNull(observation, "observation");
         Position self = observation.getSelfPosition();

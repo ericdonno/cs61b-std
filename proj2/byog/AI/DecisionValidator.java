@@ -237,6 +237,9 @@ public final class DecisionValidator {
         return ValidationResult.ACCEPTED;
     }
 
+    /**
+     * 确认目标来自源 observation 已知的信息，防止引用隐藏世界状态。
+     */
     private static boolean isKnownTarget(
             AgentProtocol.Skill skill,
             AgentProtocol.PositionData target,
@@ -297,6 +300,9 @@ public final class DecisionValidator {
         };
     }
 
+    /**
+     * 确定性选择首个非自身的可行走可见 tile；无候选时保持原位。
+     */
     private static Position deterministicPatrolTarget(
             ObservationEnvelope sourceObservation) {
         Position self = sourceObservation.getSelfPosition();

@@ -277,6 +277,9 @@ public final class IntentArbiter {
         }
     }
 
+    /**
+     * 计算租约截止 tick，并将数值溢出转换为明确的参数错误。
+     */
     private static long addTicks(long currentTick, int validForTicks) {
         if (currentTick < 0) {
             throw new IllegalArgumentException(

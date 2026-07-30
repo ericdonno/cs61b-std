@@ -229,8 +229,14 @@ public class Enemy extends Entity {
     }
 
     /**
-     * Production polling stage. Without an AgentSession this is deliberately
-     * a non-blocking no-op.
+     * 在一次 AI tick 开始时轮询并接收 Agent 消息。
+     *
+     * <p>该方法必须保持非阻塞，避免单个敌人的消息处理拖慢整个游戏循环。
+     * 当前尚未挂接 {@code AgentSession}，因此只保留生命周期边界并校验上下文；
+     * Agent 运行时已经关闭时直接返回。</p>
+     *
+     * @param context 当前 AI tick 的运行身份、楼层和逻辑时钟
+     * @throws IllegalArgumentException Agent 运行时尚未关闭但 {@code context} 为 null
      */
     public void pollAgentMessages(AiTickContext context) {
         if (agentRuntimeClosed) {
@@ -242,12 +248,33 @@ public class Enemy extends Entity {
     }
 
     /**
-     * Production execution stage. At most one action is attempted whenever the
-     * original cooldown becomes due. Uses IntentArbiter for P0-P4 priority.
+     * 根据上一轮已提交的私有观察进行仲裁，并在冷却到期时最多执行一个动作。
+     *
+     * <p>方法先推进移动冷却；冷却未到期、敌人已死亡、Agent 运行时已关闭，
+     * 或尚无可用观察时不会执行动作。仲裁只读取 {@link ReflexObservation}
+     * 和已保存的 {@link ObservationEnvelope}，不会直接读取实时玩家对象。</p>
+     *
+     * <p>仲裁优先级与 {@link IntentArbiter.Level} 一一对应：
+     * {@code P1_REFLEX}（Safety Reflex）、{@code P2_REFLEX}（Visible Threat Reflex）、
+     * {@code P3_LEASE}（Active Intent Lease）和
+     * {@code P4_LOCAL_FALLBACK}（Local Fallback）。
+     * 所有意图都必须经过 Java planner 转换为 {@link Action}。动作执行后，本方法
+     * 只保存一个待提交的动作记录；提交后的坐标、生命值和反馈由
+     * {@link #collectAgentUpdates(AiTickContext, TETile[][], EntityManager, Player)}
+     * 在世界变更提交后补全。</p>
+     *
+     * @param context 当前 AI tick 的运行身份、楼层和逻辑时钟
+     * @param world 当前权威世界；动作可能修改其中的 tile
+     * @param entityMgr 当前实体管理器，供规划和碰撞检查使用
+     * @throws IllegalArgumentException 任一参数为 null
+     * @throws IllegalStateException 上一次执行产生的待提交动作尚未完成反馈收集
      */
     public void executeOneAction(AiTickContext context,
                                  TETile[][] world,
                                  EntityManager entityMgr) {
+
+        /* 前置判断，相当于 P0 级仲裁（安全规则） */
+
         if (agentRuntimeClosed || !isAlive()) {
             return;
         }
@@ -260,30 +287,35 @@ public class Enemy extends Entity {
                     "collectAgentUpdates must complete before the next execute");
         }
 
-        // Preserve the established cooldown order: increment first, then compare.
+        // 保持既有冷却语义：先累计 tick，再判断本轮是否允许行动。
         tickCounter++;
         if (tickCounter < moveInterval) {
             return;
         }
         tickCounter = 0;
 
-        // Game primes observations after spawn/load. A missing observation is a
-        // cold-start boundary, never permission to read the live Player object.
+        // 决策只能使用上一轮已提交的私有观察；冷启动时宁可跳过，也不读取实时 Player。
         if (latestObservation == null) {
             return;
         }
 
-        ReflexObservation reflex = latestReflexObservation;
+        // 反射是否接管
         boolean overrideWasActive = arbiter.isInReflexOverride();
-        IntentArbiter.ArbiterDecision decision =
+        String overrideReason = null;  // 初始化为空内容
+
+        // Decision: 仲裁结果 (Arbiter 只选择控制来源，具体意图仍由对应控制器生成)
+        ReflexObservation reflex = latestReflexObservation;    // 反射（快脑观察）
+        IntentArbiter.ArbiterDecision decision =             // decide出仲裁结果，返回决策等级
                 arbiter.decide(reflex, context.getLogicalTick());
+        AgentProtocol.DecisionSource source = AgentProtocol.DecisionSource.LOCAL_FALLBACK;  // 初始化，默认值，兜底
+        String decisionId = currentDecisionId;   // 初始化为与上一次execute一样
+
+        // 初始化action指针
         Action action = null;
-        String overrideReason = null;
-        AgentProtocol.DecisionSource source = AgentProtocol.DecisionSource.LOCAL_FALLBACK;
-        String decisionId = currentDecisionId;
 
         switch (decision.getLevel()) {
             case P1_REFLEX: {
+                // Safety Reflex：相邻威胁触发立即攻击，并暂时覆盖当前 Intent Lease。
                 StrategicIntent reflexIntent =
                         reflexController.createAdjacentAttackIntent(reflex);
                 action = planSingleAction(
@@ -307,6 +339,7 @@ public class Enemy extends Entity {
                 break;
             }
             case P2_REFLEX: {
+                // Visible Threat Reflex：玩家可见且 Interrupt Policy 允许时主动接战。
                 StrategicIntent reflexIntent =
                         reflexController.createEngageIntent(reflex);
                 action = planSingleAction(
@@ -330,6 +363,7 @@ public class Enemy extends Entity {
                 break;
             }
             case P3_LEASE: {
+                // Active Intent Lease：继续已有计划，仅在决策变化或队列不足时重新规划。
                 IntentLease lease = arbiter.getCurrentLease();
                 StrategicIntent leaseIntent = lease.getIntent();
 
@@ -354,6 +388,7 @@ public class Enemy extends Entity {
                 break;
             }
             case P4_LOCAL_FALLBACK: {
+                // Local Fallback：没有可用 Lease 时，由本地 Brain 创建并接管新计划。
                 StrategicIntent intent = brain.thinkFromObservation(latestObservation);
                 currentStrategy = intent.getStrategy();
                 startLocalDecision(context);
@@ -379,6 +414,7 @@ public class Enemy extends Entity {
             return;
         }
 
+        // 此处只执行并暂存原始结果；提交后的最终状态由 collectAgentUpdates 补全。
         Position before = copyPosition(getPosition());
         Action.ActionResult result = action.execute(world, this);
         actionsExecutedForDecision++;
@@ -391,8 +427,23 @@ public class Enemy extends Entity {
     }
 
     /**
-     * Production collection stage. The entity index must already reflect the
-     * action executed in stage 2.
+     * 在世界变更提交后收集敌人的最新私有观察和动作反馈。
+     *
+     * <p>调用方必须先完成实体增删提交和死亡实体清理，使空间索引能够反映
+     * {@link #executeOneAction(AiTickContext, TETile[][], EntityManager)} 的执行结果。
+     * 本方法基于已提交世界重新计算 {@link ObservationEnvelope}，同步更新反射观察
+     * 和可见性遮罩；若存在待提交动作，则生成包含最终位置、生命值、决策来源和
+     * 覆盖原因的 {@link ActionOutcome}，随后清除待提交记录。</p>
+     *
+     * <p>敌人已死亡或 Agent 运行时已关闭时直接返回，不再生成观察或反馈。</p>
+     *
+     * @param context 当前 AI tick 的运行身份、楼层和逻辑时钟；必须与待提交动作一致
+     * @param world 已完成本次动作提交的权威世界
+     * @param entityMgr 已完成增删提交和死亡清理的实体管理器
+     * @param player 当前玩家，仅用于生成受视野限制的私有观察
+     * @throws IllegalArgumentException 任一参数为 null
+     * @throws IllegalStateException 当前敌人不在已提交空间索引的自身位置，
+     *                               或待提交动作与当前上下文不匹配
      */
     public void collectAgentUpdates(AiTickContext context,
                                     TETile[][] world,
@@ -406,14 +457,19 @@ public class Enemy extends Entity {
             throw new IllegalArgumentException(
                     "context, world, entityMgr and player must not be null");
         }
+
+        // 空间索引必须已经提交本轮动作产生的实体变化。
         if (entityMgr.findEntityAt(getPosition()) != this) {
             throw new IllegalStateException(
                     "collectAgentUpdates must run after the world commit barrier");
         }
+
+        // 有动作待反馈时，禁止跨 run、楼层或逻辑 tick 错配结果。
         if (pendingAction != null) {
             ensureMatchingCollectContext(context, pendingAction);
         }
 
+        // 从已提交世界生成下一轮决策使用的私有观察及 Reflex Observation。
         ObservationEnvelope committedObservation =
                 PerceptionSystem.computeObservation(
                         context.getRunId(), context.getFloorId(),
@@ -425,6 +481,7 @@ public class Enemy extends Entity {
         cachedVisibleMask = committedObservation.getVisibleMask();
 
         if (pendingAction != null) {
+            // 使用提交后的最终位置和生命值补全 Action Outcome。
             lastActionOutcome = new ActionOutcome(
                     pendingAction.runId, pendingAction.floorId, agentId,
                     pendingAction.logicalTick, pendingAction.decisionId,
@@ -449,6 +506,9 @@ public class Enemy extends Entity {
         pendingAction = null;
     }
 
+    /**
+     * 创建本地决策身份，并重置该决策的动作序号。
+     */
     private void startLocalDecision(AiTickContext context) {
         currentDecisionId = "local-" + agentId + "-tick-"
                 + context.getLogicalTick();
@@ -456,6 +516,9 @@ public class Enemy extends Entity {
         actionsExecutedForDecision = 0;
     }
 
+    /**
+     * 切换当前决策归属；决策或来源变化时重新计算动作序号。
+     */
     private void selectDecision(
             String decisionId,
             AgentProtocol.DecisionSource source) {
@@ -467,6 +530,9 @@ public class Enemy extends Entity {
         }
     }
 
+    /**
+     * 通过权威 Java planner 将意图转换为至多一个待执行动作。
+     */
     private Action planSingleAction(
             StrategicIntent intent,
             TETile[][] world,
@@ -480,6 +546,9 @@ public class Enemy extends Entity {
         return actions.isEmpty() ? null : actions.get(0);
     }
 
+    /**
+     * 校验动作执行与反馈收集使用相同的运行身份、楼层和逻辑 tick。
+     */
     private static void ensureMatchingCollectContext(
             AiTickContext context, PendingAction action) {
         if (!action.runId.equals(context.getRunId())
