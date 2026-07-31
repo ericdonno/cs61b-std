@@ -1,20 +1,19 @@
 # DungeonMind AgentSession 架构
 
-> 状态：当前无网络核心实现说明
+> 状态：AgentSession 核心与 TCP transport 实现说明
 >
 > 更新时间：2026-07-31
 >
 > 范围：`AgentSession` 的身份、请求生命周期、deadline、取消、有界邮箱、
-> `TransportEndpoint`、`AgentTransport`、关闭语义与确定性测试
+> `TransportEndpoint`、`AgentTransport`、TCP/NDJSON、关闭语义与测试
 >
-> 不包含：真实 Socket/NDJSON IO worker、指数退避线程、Python Agent runtime、
-> `Enemy`/`Game` 生产接线、Tool Calling 和多 Agent 协作
+> 不包含：Python Agent runtime、`Enemy`/`Game` 生产接线、Tool Calling 和多 Agent 协作
 
 ---
 
 ## 0. 先读这一页
 
-`AgentSession` 已经实现为一个可确定性测试的纯 Java 会话核心，但尚未接入正式游戏运行时和真实网络。
+`AgentSession` 会话核心与 `SocketTransport` 已实现；正式游戏尚未创建 Session，Python runtime 也尚未实现。
 
 | 能力 | 状态 | 当前行为 |
 |------|------|----------|
@@ -29,7 +28,7 @@
 | 幂等、永久 close | **已实现** | close 后请求、发送、入站和重连都不能重新激活 |
 | transport 生命周期控制 | **已实现** | 注入的 `AgentTransport` 接收 start、rebuild 和永久 close |
 | 内存 transport 测试 seam | **已实现** | 测试 transport 同时实现控制面并通过 endpoint 驱动数据面 |
-| TCP IO worker | **未实现** | 当前没有 Socket、reader、writer 或后台线程 |
+| TCP IO worker | **已实现** | 独立 worker 持有 Socket，执行 persistent NDJSON、退避重连和有界关闭 |
 | 生产 Game/Enemy 接线 | **未实现** | 正式 `pollAgentMessages()` / `collectAgentUpdates()` 尚未持有 Session |
 | Python runtime | **未实现** | 当前没有跨进程往返 |
 
@@ -38,7 +37,7 @@
 - **实线**：当前代码已经存在并由测试真实执行。
 - **虚线**：已锁定的接入位置或后续模块，当前没有生产调用。
 - **game-thread API**：只做内存状态转换和有界 enqueue/drain，不能阻塞。
-- **transport endpoint**：未来由唯一 IO worker 持有；当前由内存 fake transport 驱动。
+- **transport endpoint**：生产由唯一 IO worker 持有；确定性测试仍可由内存 fake transport 驱动。
 - **transport control**：Session 调用 `AgentTransport` 发出非阻塞的重建或关闭命令。
 
 ---
@@ -77,8 +76,8 @@ flowchart LR
     A["guard-a<br/>私有 Observation"] --> SA["AgentSession A<br/>identity / request / queues"]
     B["guard-b<br/>私有 Observation"] --> SB["AgentSession B<br/>identity / request / queues"]
 
-    SA -.-> CA["TCP connection A<br/>尚未实现"]
-    SB -.-> CB["TCP connection B<br/>尚未实现"]
+    SA --> CA["TCP connection A"]
+    SB --> CB["TCP connection B"]
 
     CA -.-> PA["Python context A"]
     CB -.-> PB["Python context B"]
@@ -110,7 +109,7 @@ flowchart LR
         VALIDATOR["DecisionValidator<br/>已实现"]
     end
 
-    subgraph CORE["AgentSession 无网络核心（已实现）"]
+    subgraph CORE["AgentSession 核心（已实现）"]
         API["game-thread API"]
         REQUEST["Request lifecycle<br/>current / cancelled / latest"]
         OUT["bounded outbound queue"]
@@ -137,10 +136,10 @@ flowchart LR
         RECORD["RecordingHandler"]
     end
 
-    subgraph NETWORK["真实跨进程环境（尚未实现）"]
-        WORKER["TCP IO worker"]
-        SOCKET["persistent NDJSON Socket"]
-        PYTHON["Python Agent"]
+    subgraph NETWORK["跨进程环境"]
+        WORKER["SocketTransport<br/>已实现"]
+        SOCKET["persistent NDJSON Socket<br/>已实现"]
+        PYTHON["Python Agent<br/>尚未实现"]
     end
 
     COLLECT -.-> API
@@ -153,9 +152,9 @@ flowchart LR
     CONTROL --> FAKETRANSPORT
     HANDLER --> RECORD
 
-    ENDPOINT -.-> WORKER
-    CONTROL -.-> WORKER
-    WORKER -.-> SOCKET
+    ENDPOINT --> WORKER
+    CONTROL --> WORKER
+    WORKER --> SOCKET
     SOCKET -.-> PYTHON
     PYTHON -.-> SOCKET
 ```
@@ -232,8 +231,8 @@ flowchart TD
 | 所有者 | 允许调用 |
 |--------|----------|
 | 游戏线程 | `requestIntent`、`sendActionFeedback`、`sendWorldEvent`、`sendHeartbeat`、`advanceRequestLifecycle`、`supersedeCurrentRequest`、`pollInbound`、状态 getter |
-| transport owner | `markConnecting`、`markConnected`、`markDisconnected`、`pollOutbound`、`offerInbound`、`reportProtocolFailure` |
-| Session → transport | `start`、`requestRebuild`、`close`；实现必须非阻塞 |
+| transport owner | `markConnecting`、`markConnected`、`markDisconnected`、`pollOutbound`、`offerInbound`、protocol failure report |
+| Session → transport | `start`、`requestRebuild` 必须非阻塞；`close` 只允许有界 shutdown join |
 
 最重要的边界是：
 
@@ -242,9 +241,10 @@ transport owner 只把已解码消息放入 inbound queue
 游戏线程调用 pollInbound 时才触发 AgentHandler
 ```
 
-因此未来 IO worker 即使收到合法 `submit_intent`，也不能直接移动 Enemy、修改 Lease 或调用 Planner。
+因此 IO worker 即使收到合法 `submit_intent`，也不能直接移动 Enemy、修改 Lease 或调用 Planner。
 
-当前没有真实 IO thread；`AgentSessionTest.InMemoryTransport` 扮演 transport owner，以确定顺序手动驱动端点。
+生产 `SocketTransport` 的 IO thread 驱动端点；`AgentSessionTest.InMemoryTransport` 继续以确定顺序
+手动驱动同一端点，用于覆盖精确状态转换。
 
 ---
 
@@ -520,7 +520,7 @@ stateDiagram-v2
 
 ### 8.2 TransportEndpoint 的职责
 
-| 方法 | 当前作用 | 未来 IO worker 的调用位置 |
+| 方法 | 当前作用 | SocketTransport 的调用位置 |
 |------|----------|--------------------------|
 | `markConnecting()` | 标记连接尝试 | connect 前 |
 | `markConnected(tick)` | 打开新 epoch、重置 message seq | connect 成功后 |
@@ -528,6 +528,7 @@ stateDiagram-v2
 | `pollOutbound()` | 非阻塞取得一个待发送 envelope | write loop |
 | `offerInbound(envelope, tick)` | 非阻塞放入已解码 envelope | read/decode 后 |
 | `reportProtocolFailure(failure, tick)` | 报告 framing/codec failure | frame reader/codec 失败后 |
+| `reportRecoverableProtocolFailure(failure, tick)` | 报告兼容拒绝且保持连接 | 未知兼容消息后 |
 | `isRebuildRequested()` | 查询 Session 是否要求重建物理连接 | worker control loop |
 | `acknowledgeRebuildRequest()` | worker 确认已看到重建请求 | 开始 teardown/reconnect 时 |
 
@@ -539,18 +540,19 @@ stateDiagram-v2
 | `requestRebuild()` | cancel grace、协议致命错误、关键 outbound 饱和或连接丢失 | 关闭当前物理连接并安排重连，不阻塞 |
 | `close()` | Session 首次永久关闭 | 幂等关闭并唤醒阻塞工作 |
 
-### 8.3 当前尚未实现的连接行为
+### 8.3 当前连接行为
 
-以下配置已经存在于 `AgentSessionConfig`，但当前还没有后台 worker 消费它们：
+`SocketTransport` 的后台 worker 消费以下 `AgentSessionConfig` 配置：
 
 - host / port
 - reconnect initial / max delay
 - max frame bytes
 - shutdown join 上限
 
-Session 现在会同时设置 `rebuildRequested=true` 并调用注入 transport 的 `requestRebuild()`。
-内存 transport 会立即模拟物理 teardown；兼容构造器使用 no-op transport。真实 Socket 创建、
-reader 唤醒和 backoff 仍由尚未实现的 TCP worker 负责。
+Session 会同时设置 `rebuildRequested=true` 并调用注入 transport 的 `requestRebuild()`。
+内存 transport 继续用于确定性状态机测试；默认启用构造路径创建 `SocketTransport`。worker
+独占 connect/read/write，以短读超时交替推进双向队列；frame 在分配完整大字符串前按 UTF-8
+bytes 限制，EOF/IO/fatal protocol failure 进入断线重连，terminal close 关闭 Socket 并有界 join。
 
 ---
 
@@ -841,14 +843,24 @@ detail
 | close 两次 | 幂等且永久 |
 | 两个 Enemy Session | 身份、队列、generation 和响应不串线 |
 
+[`SocketTransportTest`](byog/Bridge/SocketTransportTest.java) 另外覆盖：
+
+- 真实 localhost Socket 写出完整 NDJSON frame；
+- connect/read/write 只在同一 worker thread 上发生；
+- 250 → 500 ms 退避、成功后重置和重连 epoch；
+- terminal close 解除阻塞 read 并在 join 上限内结束；
+- bounded byte reader 在第一个超限 byte 立即失败，跨 timeout 保留半帧，并严格拒绝坏 UTF-8；
+- outbound 超限在写出前失败，未知兼容消息报告错误但不掉线。
+
 2026-07-31 的验证结果：
 
 ```text
-统一 deterministic gate
-OK (89 tests)
+快速 gate + 独立 Socket transport tests
+OK (98 tests)
 ```
 
-这些测试不访问真实端口、不启动 Python、不使用 `Thread.sleep()`。
+状态机测试不访问真实端口；transport 测试只使用一个有界 localhost endpoint 和可注入连接，
+不启动 Python，也不使用 `Thread.sleep()`。
 
 ---
 
@@ -891,11 +903,11 @@ sequenceDiagram
 
 ---
 
-## 17. 当前未实现模块
+## 17. 当前实现边界
 
 ### 17.1 TCP IO worker
 
-后续 worker 需要：
+`SocketTransport` 已实现：
 
 - 唯一持有 Socket。
 - persistent NDJSON read/write。
@@ -924,7 +936,8 @@ sequenceDiagram
 - `AgentHandler` 把合法 request response 转交 `DecisionValidator`。
 - bridge disabled 时不创建网络线程，但仍保持现有本地 AI Tick。
 
-这些模块未完成前，不应把 Session 当前的内存 round-trip 描述为 Java ↔ Python 端到端闭环。
+Python runtime 与生产接线完成前，不应把当前 localhost transport 测试描述为
+Java ↔ Python 端到端闭环。
 
 ---
 
@@ -955,11 +968,13 @@ sequenceDiagram
 4. [`enqueueOutbound` 与 pending event 合并](byog/Bridge/AgentSession.java)
 5. [`TransportEndpoint`、`enqueueInbound` 与 `pollInbound`](byog/Bridge/AgentSession.java)
 6. [`AgentTransport`](byog/Bridge/AgentTransport.java)
-7. [`AgentHandler`](byog/Bridge/AgentHandler.java)
-8. [`AgentSessionConfig`](byog/Bridge/AgentSessionConfig.java)
-9. [`MonotonicClock`](byog/Bridge/MonotonicClock.java)
-10. [`AgentProtocol` 与 codec](byog/Bridge/AgentProtocol.java)
-11. [`AgentSessionTest`](byog/Test/AgentSessionTest.java)
+7. [`SocketTransport`](byog/Bridge/SocketTransport.java)
+8. [`AgentHandler`](byog/Bridge/AgentHandler.java)
+9. [`AgentSessionConfig`](byog/Bridge/AgentSessionConfig.java)
+10. [`MonotonicClock`](byog/Bridge/MonotonicClock.java)
+11. [`AgentProtocol` 与 codec](byog/Bridge/AgentProtocol.java)
+12. [`AgentSessionTest`](byog/Test/AgentSessionTest.java)
+13. [`SocketTransportTest`](byog/Bridge/SocketTransportTest.java)
 
 读完第 3 项可以理解 single in-flight 和 deadline；读完第 5 项可以理解线程边界和背压；
-读完第 11 项可以看到所有当前状态转换怎样被确定性复现。
+读完最后两项可以看到状态转换与真实 transport 边界怎样分别验证。

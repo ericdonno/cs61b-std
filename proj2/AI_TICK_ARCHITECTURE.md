@@ -24,7 +24,7 @@
 | 本地 RuleBasedBrain fallback | **已实现** | 无可用 Lease 时仍能行动 |
 | 远程 proposal 校验入口 | **接口已预留** | `tryAdoptRemoteIntent()` 可用，但当前只有测试调用 |
 | AgentSession / 有界队列 | **核心已实现** | 已有确定性测试；`pollAgentMessages()` 尚未接线 |
-| AgentTransport 控制面 | **接口已实现** | Session 可请求重建和永久关闭；真实 TCP worker 尚未实现 |
+| AgentTransport / TCP worker | **已实现** | `SocketTransport` 独占 Socket，负责 NDJSON、退避重连和有界关闭 |
 | Python Agent runtime | **未实现** | 不参与当前游戏行为 |
 
 读图时使用以下约定：
@@ -491,7 +491,7 @@ flowchart LR
 
 ### 5.1 模块连接图
 
-实线表示已经实现的 Session 内部关系；虚线表示生产接线或尚未实现的跨进程模块。
+实线表示已经实现的 Session/transport 关系；虚线表示生产接线或尚未实现的 Python 模块。
 
 ```mermaid
 flowchart LR
@@ -509,12 +509,12 @@ flowchart LR
     HANDLER -.-> VALIDATOR["DecisionValidator<br/>已实现"]
     VALIDATOR --> ARBITER["IntentArbiter<br/>已实现"]
 
-    OUTQ -.-> IO["TCP IO worker"]
-    TRANSPORT -.-> IO
-    IO -.-> TCP["persistent NDJSON TCP"]
+    OUTQ --> IO["SocketTransport<br/>TCP IO worker"]
+    TRANSPORT --> IO
+    IO --> TCP["persistent NDJSON TCP"]
     TCP -.-> PY["Python Agent runtime"]
     PY -.-> TCP
-    IO -.-> INQ
+    IO --> INQ
 
     COLLECT -.->|"ObservationEnvelope<br/>ActionOutcome"| OUTQ
     INQ -.->|"submit_intent<br/>cancel_ack"| POLL
@@ -531,9 +531,9 @@ flowchart LR
 | `AgentSessionConfig` | **已实现** | 地址、容量、deadline 和重连配置快照 |
 | `AgentHandler` | **已实现** | 在游戏线程接收消息，并显式返回 intent 接受/拒绝结果 |
 | `MonotonicClock` | **已实现** | 为 deadline 提供可测试的单调时间 |
-| `AgentTransport` | **接口已实现** | 绑定 endpoint、请求物理重建、永久关闭 transport |
+| `AgentTransport` | **已实现** | `SocketTransport` 绑定 endpoint、请求物理重建、永久关闭 transport |
 | inbound/outbound queues | **已实现** | 隔离游戏线程与 IO，提供有界背压 |
-| TCP IO worker | **未实现** | 唯一允许操作 Socket、Reader、Writer 的线程 |
+| TCP IO worker | **已实现** | 唯一操作 connect/read/write 的线程；短读超时保证双向推进 |
 | Python Agent runtime | **未实现** | 消费 observation/feedback，返回受限 intent |
 
 更完整的 Session 状态机、失败语义和测试说明见 [`session.md`](session.md)。

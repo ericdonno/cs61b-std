@@ -271,6 +271,24 @@ public final class AgentSession implements AutoCloseable {
             }
         }
 
+        /**
+         * Reports a compatible message rejection without rebuilding the
+         * physical connection.
+         */
+        public void reportRecoverableProtocolFailure(
+                AgentProtocolCodec.ProtocolFailure failure,
+                long logicalTick) {
+            synchronized (AgentSession.this) {
+                if (closed) {
+                    return;
+                }
+                pendingProtocolFailure =
+                        Objects.requireNonNull(failure, "failure");
+                record(LifecycleEventType.INBOUND_REJECTED,
+                        logicalTick, null, failure.detail());
+            }
+        }
+
         /** Returns whether the session has requested a physical rebuild. */
         public boolean isRebuildRequested() {
             synchronized (AgentSession.this) {
@@ -323,7 +341,7 @@ public final class AgentSession implements AutoCloseable {
             AgentProtocol.Identity identity,
             MonotonicClock clock) {
         this(config, identity, clock, new IdGenerator.UuidIdGenerator(),
-                AgentTransport.noOp());
+                new SocketTransport(config));
     }
 
     public AgentSession(
@@ -331,7 +349,8 @@ public final class AgentSession implements AutoCloseable {
             AgentProtocol.Identity identity,
             MonotonicClock clock,
             IdGenerator idGenerator) {
-        this(config, identity, clock, idGenerator, AgentTransport.noOp());
+        this(config, identity, clock, idGenerator,
+                new SocketTransport(config));
     }
 
     public AgentSession(
@@ -649,27 +668,31 @@ public final class AgentSession implements AutoCloseable {
      * Permanently closes the session and discards queued runtime state.
      */
     @Override
-    public synchronized void close() {
-        if (closed) {
-            return;
+    public void close() {
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            requestState = RequestState.NO_REQUEST;
+            currentRequest = null;
+            cancelledRequest = null;
+            latestObservation = null;
+            requestPending = false;
+            rebuildRequested = false;
+            pendingProtocolFailure = null;
+            outboundQueue.clear();
+            inboundQueue.clear();
+            pendingEvents.clear();
+            record(LifecycleEventType.SESSION_CLOSED, -1, null,
+                    "terminal close");
         }
-        closed = true;
-        requestState = RequestState.NO_REQUEST;
-        currentRequest = null;
-        cancelledRequest = null;
-        latestObservation = null;
-        requestPending = false;
-        rebuildRequested = false;
-        pendingProtocolFailure = null;
-        outboundQueue.clear();
-        inboundQueue.clear();
-        pendingEvents.clear();
-        record(LifecycleEventType.SESSION_CLOSED, -1, null,
-                "terminal close");
         try {
             transport.close();
         } catch (RuntimeException exception) {
-            recordTransportControlFailure("close", exception);
+            synchronized (this) {
+                recordTransportControlFailure("close", exception);
+            }
         }
     }
 
