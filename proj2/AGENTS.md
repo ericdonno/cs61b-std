@@ -15,6 +15,7 @@ byog/
   Action/        Action, MoveAction, AttackAction, ActionQueue
   WorldGen/      WorldGenerator, Room, SquareRoom, Hall, RoomGraph, WorldGenResult
   Perception/    PerceptionSystem, ObservationEnvelope, VisibleEntity, HeardEvent
+  Bridge/        AgentProtocol, AgentSession, SocketTransport  # 游戏侧远程 Agent 边界
   IO/            SaveLoadManager, GameSaveData, GameConfig
   Trace/         AgentTrace
   Common/        Direction, Difficulty, RandomUtils
@@ -23,6 +24,18 @@ byog/
   Helper/        Logger, MathHelper, MatrixGraph, ListGraph, ArrayDeque
   lab5/          Position, HexWorld, RandomWorldDemo
 ```
+
+外部 Agent runtime 按语言隔离，并共享稳定的 wire contract：
+
+```
+agent/
+  contract/      跨语言协议说明与兼容性 fixtures
+  python/        dungeonmind_agent、CLI 与 Python 测试
+  typescript/    未来 TypeScript runtime，与 python/ 平行
+```
+
+`byog/Bridge` 只负责 Java 游戏进程一侧的协议、会话与传输；具体语言的
+Agent 大脑不得放入 `byog/Bridge` 或根目录 `bridge/`。
 
 ### 历史约束（已作废）
 

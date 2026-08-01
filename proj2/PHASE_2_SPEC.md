@@ -945,9 +945,9 @@ agent.actionQueue.highWater=5
 | `byog/Trace/AgentTrace.java` | 修改 | phase2 schema、事件和关联字段；保持 Phase0/1 schema 语义隔离 | 把完整 gameplay 轨迹当兼容 API |
 | `byog/IO/GameConfig.java` | 修改 | bridge/action queue 配置和默认生成 | 模型配置 |
 | `config/game.properties` | 修改 | 增加 Phase 2 默认项 | API key |
-| `bridge/protocol.py` | 新建 | 与 Java schema 对称的严格标准库 codec/validation | LLM |
-| `bridge/fake_agent.py` | 新建 | 多连接 deterministic fake、测试故障模式 | LangGraph/状态记忆 |
-| `bridge/run.py` | 新建 | CLI host/port/mode/delay 入口 | 自动被 Main 启动 |
+| `agent/python/dungeonmind_agent/protocol.py` | 新建 | 与 Java schema 对称的严格标准库 codec/validation | LLM |
+| `agent/python/dungeonmind_agent/brain/deterministic.py` | 新建 | 每连接 deterministic brain | LangGraph/状态记忆 |
+| `agent/python/dungeonmind_agent/server.py`、`agent/python/run.py` | 新建 | 多连接 server 与 CLI host/port/mode/delay 入口 | 自动被 Main 启动 |
 | `byog/Test/Phase2ProtocolTest.java` | 新建 | codec、有限知识、坏消息 | 网络 sleep |
 | `byog/Test/Phase2SessionTest.java` | 新建 | fake clock/transport 下的状态、队列、deadline、close | GUI |
 | `byog/Test/Phase2AiTickTest.java` | 新建 | 双速、P0–P4、cooldown、commit、feedback | 真实 LLM |
@@ -1060,10 +1060,14 @@ java "-Dfile.encoding=UTF-8" -cp "out;..\library-sp18\javalib\*" `
 **验证**：
 
 ```powershell
-python bridge/run.py --host 127.0.0.1 --port 9876 --mode normal
+python agent/python/run.py --host 127.0.0.1 --port 9876 --mode normal
 ```
 
-另开终端运行 protocol smoke script；不调用模型、不访问网络。
+另开终端运行 protocol smoke script；不调用模型、不访问外部网络：
+
+```powershell
+python agent/python/smoke_test.py
+```
 
 **产出**：可独立启动的 fake runtime。
 

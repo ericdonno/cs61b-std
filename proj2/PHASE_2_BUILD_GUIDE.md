@@ -1647,11 +1647,18 @@ join 是“等待另一个线程结束”。它只能在游戏退出/清理路�
 建议文件：
 
 ```text
-bridge/
-  protocol.py     Python 侧 codec 和 DTO/校验
-  fake_agent.py   确定性决策和故障行为
-  run.py          TCP server CLI 入口
-  smoke_test.py   最小协议冒烟测试
+agent/
+  contract/                              跨语言协议说明与 fixtures
+  python/
+    dungeonmind_agent/
+      protocol.py                        Python 侧 codec 和 DTO/校验
+      server.py                          多连接 TCP server
+      brain/
+        deterministic.py                 确定性决策
+    tests/                               Python 协议、决策和 runtime 测试
+    run.py                               CLI 入口
+    smoke_test.py                        最小协议冒烟测试
+  typescript/                            未来平行的 TypeScript runtime
 ```
 
 ### 2.6.2 run.py：启动一个多连接 TCP server
@@ -1671,10 +1678,17 @@ bridge/
 CLI：
 
 ```powershell
-python bridge/run.py `
+python agent/python/run.py `
     --host 127.0.0.1 `
     --port 9876 `
     --mode normal
+```
+
+Python 快速闸门：
+
+```powershell
+python -m unittest discover -s agent/python -p "test_*.py" -v
+python agent/python/smoke_test.py --spawn-server
 ```
 
 生产 `Main` 只负责连接配置地址，不自动启动 Python。Integration harness 可以通过 `ProcessBuilder` 启动它，这是测试基础设施，不是生产生命周期。
@@ -2330,7 +2344,7 @@ advance to 2500ms → 进入 SOFT_TIMED_OUT
 `Phase2IntegrationTest` 可以用 Java `ProcessBuilder` 启动：
 
 ```powershell
-python bridge/run.py --host 127.0.0.1 --port <test-port> --mode normal
+python agent/python/run.py --host 127.0.0.1 --port <test-port> --mode normal
 ```
 
 测试需要：
@@ -2615,7 +2629,7 @@ Completion 文档回答的是：“别人如何复查 Phase 2 确实达到 Spec�
 | 动作执行 | `byog/Action/ActionOutcome.java`、`ActionQueue.java`、`byog/AI/ClassicalPlanner.java` |
 | 生产集成 | `byog/Entity/Enemy.java`、`byog/Core/Game.java` |
 | 可观测性与配置 | `byog/Trace/AgentTrace.java`、`byog/IO/GameConfig.java`、`config/game.properties` |
-| Python fake runtime | `bridge/protocol.py`、`fake_agent.py`、`run.py`、`smoke_test.py` |
+| Python fake runtime | `agent/python/dungeonmind_agent/protocol.py`、`brain/deterministic.py`、`server.py`、`agent/python/run.py`、`smoke_test.py` |
 | 测试 | `byog/Test/EncounterHarness.java`、`byog/AI/AiTickLoop.java`、`Phase2ProtocolTest.java`、`Phase2SessionTest.java`、`Phase2AiTickTest.java`、`Phase2IntegrationTest.java`、`Phase2TestSuite.java` |
 
 明确不要创建旧方案中的：
