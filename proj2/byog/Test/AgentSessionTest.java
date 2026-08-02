@@ -103,6 +103,26 @@ public class AgentSessionTest {
     }
 
     @Test
+    public void reconnectRequestUsesLatestCommittedObservationTick() {
+        Fixture fixture = newFixture("guard-a", 4, 4);
+        fixture.session.requestIntent(fixture.observation(1), List.of(), 1);
+        fixture.transport.takeOneOutbound();
+        fixture.transport.disconnect("test reconnect", 2);
+
+        assertEquals(AgentSession.RequestStartResult.NOT_CONNECTED,
+                fixture.session.requestIntent(
+                        fixture.observation(7), List.of(), 7));
+        fixture.transport.connect(-1);
+
+        AgentProtocol.Envelope request =
+                fixture.transport.takeOneOutbound();
+        assertEquals(7, request.logicalTick);
+        assertEquals(7,
+                ((AgentProtocol.ObservationData) request.data)
+                        .observedAtTurn());
+    }
+
+    @Test
     public void softDeadlineKeepsTheActiveRequest() {
         Fixture fixture = newFixture("guard-a", 4, 4);
         fixture.session.requestIntent(fixture.observation(1), List.of(), 1);
@@ -780,6 +800,12 @@ public class AgentSessionTest {
             endpoint.markConnecting();
             endpoint.markConnected(logicalTick);
             nextInboundSequence = 0;
+        }
+
+        /** Simulates transport loss without invoking any socket behavior. */
+        private void disconnect(String detail, long logicalTick) {
+            activeConnection = false;
+            endpoint.markDisconnected(detail, logicalTick);
         }
 
         private AgentSession.InboundEnqueueResult inject(

@@ -2,17 +2,50 @@
 
 > 状态：当前实现说明
 >
-> 更新时间：2026-07-31
+> 更新时间：2026-08-02
 >
-> 范围：交互式游戏入口、Game Loop、Phase 2.2、Phase 2.3，以及已实现但尚未生产接线的 AgentSession 核心
+> 范围：交互式游戏入口、Game Loop、双速控制链，以及已接入生产 Game/Enemy 的 AgentSession
 >
-> 不包含：`playWithInputString()` 的旧测试运行时、Tool Calling、多 Agent 协作和复杂计划系统
+> 不包含：`playWithInputString()` 的旧字符串输入接口、Tool Calling、多 Agent 协作和复杂计划系统
 
 ---
 
 ## 0. 先读这一页
 
-当前可玩的交互式游戏已经启用新的 AI Tick 和本地双速控制链，但还没有接入网络 Agent。
+当前交互式 Game/Enemy 已具备完整远程 Agent 接线；传入启用的
+`AgentSessionConfig` 时，每个存活 Enemy 会建立独立 Session。普通 `Main` 仍使用
+默认关闭配置，因此直接启动游戏时继续使用本地双速控制链。
+
+### 0.1 文中术语
+
+| 术语 | 在本文中的意思 |
+|------|----------------|
+| Game Loop（游戏循环） | 游戏反复执行输入、更新世界、运行 AI 和绘制画面的主循环 |
+| Tick（逻辑更新） | AI 世界推进一次；它是游戏内顺序单位，不等于现实中的一毫秒或一帧画面 |
+| Agent（智能体） | 游戏进程外部、只提出战略意图的决策组件；它不是 `Entity`，也不能直接改世界 |
+| runtime（运行时进程） | 承载外部 Agent 的独立程序和执行环境，当前实现是 Python 进程 |
+| Bridge（桥接层） | Java 游戏与外部 Agent 之间的协议、会话和传输边界，即 `byog/Bridge` |
+| `poll`（轮询） | 非阻塞地取出已经到达的消息；没有消息就立即继续 |
+| `execute`（执行） | 根据当前控制权选择并执行至多一个动作 |
+| `commit`（提交） | 让本轮排队的移动、伤害和死亡变更正式成为权威世界状态 |
+| `collect`（收集） | 从提交后的世界生成下一份私有观察和动作结果 |
+| intent / proposal（意图 / 提案） | Agent 给出的高层建议，例如追击或巡逻；不是可直接执行的移动命令 |
+| Action（原子动作） | Java 世界实际执行的一次移动或攻击，是规划器输出的最小执行单位 |
+| cooldown（冷却） | Enemy 两次可执行动作之间必须等待的逻辑时间 |
+| Reflex（反射控制） | 遇到危险或近距离目标时立即采用、优先级高于慢速计划的本地规则 |
+| Policy（控制策略） | 规定当前行为能否被更高优先级决策打断的规则 |
+| Lease（控制权租约） | 在有限逻辑时间内有效、允许持续执行某个 intent 的记录 |
+| Arbiter（仲裁器） | 在反射、现有 Lease、本地策略和远程提案之间决定谁获得控制权 |
+| Validator（校验器） | 检查远程提案的身份、权限、知识范围和当前世界前提 |
+| fallback（降级策略） | 远程 Agent 不可用时继续采用的本地决策 |
+| deadline（截止时间） | 远程请求进入“过慢”或“必须取消”状态的时间界线 |
+| backpressure（背压） | 消费速度跟不上时，用有界队列、合并或拒绝阻止消息无限堆积 |
+| worker（工作线程） | 专门负责 Socket 连接、读取和写出的后台线程，不执行游戏规则 |
+| NDJSON | 每行一个 JSON 对象的消息格式；换行符就是消息边界 |
+| `logicalTick`（逻辑时刻） | 游戏内的因果序号，用于判断先后，不用于计算现实网络等待 |
+| `runId`（对局标识） | 每次新游戏或重新建立运行上下文时生成的身份，用于拒绝旧对局消息 |
+| private observation（私有观察） | 只包含某个 Enemy 合法可见或可知信息的世界快照 |
+| outcome（动作结果） | 世界提交后确认的动作成败、位置、伤害等反馈 |
 
 | 能力 | 状态 | 当前行为 |
 |------|------|----------|
@@ -22,16 +55,17 @@
 | 私有观察与提交后反馈 | **已实现** | execute 使用旧观察，collect 从已提交世界生成新观察和 outcome |
 | Reflex / Lease / Arbiter / Validator | **已实现** | 纯 Java 控制链已经参与真实游戏运行 |
 | 本地 RuleBasedBrain fallback | **已实现** | 无可用 Lease 时仍能行动 |
-| 远程 proposal 校验入口 | **接口已预留** | `tryAdoptRemoteIntent()` 可用，但当前只有测试调用 |
-| AgentSession / 有界队列 | **核心已实现** | 已有确定性测试；`pollAgentMessages()` 尚未接线 |
+| 远程 proposal 校验入口 | **已接入** | `pollAgentMessages()` 在游戏线程把合法 proposal 交给 Validator 和 Arbiter |
+| AgentSession / 有界队列 | **已接入** | 每个 Enemy 可持有独立 Session；poll/collect/close 已进入生产生命周期 |
 | AgentTransport / TCP worker | **已实现** | `SocketTransport` 独占 Socket，负责 NDJSON、退避重连和有界关闭 |
-| Python Agent runtime | **未实现** | 不参与当前游戏行为 |
+| Python Agent runtime | **端到端接通** | 支持真实进程往返、延迟、背压、断线和恢复；不会阻塞游戏线程 |
 
 读图时使用以下约定：
 
 - **实线**：当前代码真实执行的调用。
-- **虚线**：接口或模块规划，当前没有生产调用。
-- **commit barrier**：`EntityManager` 完成待处理变更和死亡清理后，世界状态才可用于观察与反馈。
+- **虚线**：仍属于后续模型或工具扩展，不参与当前生产调用。
+- **commit barrier（提交屏障）**：`EntityManager` 完成待处理变更和死亡清理后，
+  世界状态才可用于观察与反馈。
 
 ---
 
@@ -84,7 +118,7 @@ flowchart TD
    `primeEnemyObservations()`。
 4. 暂停和菜单仍会绘制，但不会调用 `runPlayingTick()`，因此不会推进 `logicalTick`。
 5. 换层会关闭旧 Enemy runtime，重建实体并生成新楼层的初始观察。
-6. 游戏退出使用 `finally` 关闭所有 Enemy runtime，避免未来接入 Session 后泄漏资源。
+6. 游戏退出使用 `finally` 关闭所有 Enemy Session，避免连接和 IO worker 泄漏。
 
 ---
 
@@ -92,8 +126,7 @@ flowchart TD
 
 ### 2.1 架构概览
 
-下图保留原设计图，不做修改。它同时包含当前 Java 实时闭环和尚未实现的异步 Agent 链路；
-具体实现状态以 §0 和 §5 为准。
+下图展示当前 Java 实时闭环和已经接通的异步 Agent 链路；真实模型推理仍属于后续工作。
 
 ```mermaid
 graph TD
@@ -126,9 +159,9 @@ graph TD
     B --> O
 ```
 
-### 2.2 当前闭环的边界
+### 2.2 本地决策与远程 Agent 如何配合
 
-当前真正闭合的是 Java 本地循环：
+无论 Bridge 是否开启，Java 都会完成下面这条本地决策路径：
 
 ```text
 已提交世界
@@ -143,30 +176,34 @@ graph TD
   → 新 ObservationEnvelope + ActionOutcome
 ```
 
-尚未闭合的是网络循环：
+启用 Bridge 后，游戏还会异步执行下面的消息往返：
 
 ```text
-ObservationEnvelope / ActionOutcome
-  ⇢ outbound queue
-  ⇢ AgentSession / TCP
-  ⇢ Python Agent
-  ⇢ submit_intent
-  ⇢ inbound queue
-  ⇢ DecisionValidator
+世界提交完成
+  → Enemy 生成私有观察和动作反馈
+  → 放入有限容量的发送队列
+  → 网络线程通过 TCP 发给 Python Agent
+
+Python Agent 生成战略 intent
+  → 网络线程放入有限容量的接收队列
+  → 下一次游戏 tick 的 poll 环节读取
+  → Java 校验后决定是否采纳
 ```
 
-因此当前游戏能够完整运行本地 AI，但不会向 Python 发送 observation，也不会在生产路径收到远程 intent。
+这里的关键是“异步”：游戏线程只把消息放入队列，然后继续运行。网络线程负责与
+Python 通信；Python 返回 intent 后，Java 在后续 tick 的 poll 环节读取、校验并决定
+是否采纳。配置关闭时不会创建网络线程，敌人完全使用本地 AI。
 
 ---
 
-## 3. Phase 2.2：代码执行图
+## 3. AI Tick 代码执行图
 
 Phase 2.2 把一个 `PLAYING` tick 固定为 `poll → execute → commit → collect`。
 每个 Enemy 使用上一次提交后的 Observation 做决定，达到冷却时最多执行一个 Action；
 所有 Enemy 执行完后统一提交位置和死亡状态，再生成下一轮 Observation 与 ActionOutcome。
 因此动作、空间索引、反馈和下一轮感知都对应同一个明确的世界版本。
 
-### 3.1 Production AI Tick
+### 3.1 正式 AI Tick
 
 ```mermaid
 sequenceDiagram
@@ -366,7 +403,7 @@ sequenceDiagram
 
 ---
 
-## 4. Phase 2.3：代码决策图
+## 4. 控制权决策图
 
 Phase 2.3 负责决定当前动作的控制权。代码先处理 Safety Reflex 和
 Visible Threat Reflex，再尝试继续 Active Intent Lease；没有可用 Lease 时，
@@ -454,11 +491,11 @@ stateDiagram-v2
 
 远程 proposal 进入 Java 后必须先通过身份、知识边界和当前世界状态校验，
 校验成功只会安装 Lease，不会绕过 Planner 或直接操作实体。
-当前生产游戏尚未把 `pollAgentMessages()` 接到该入口。
+`pollAgentMessages()` 已在游戏线程安全边界接到该入口。
 
 ```mermaid
 flowchart LR
-    POLL["pollAgentMessages()"] -.->|当前未连接| ENTRY["Enemy.tryAdoptRemoteIntent()"]
+    POLL["pollAgentMessages()"] --> ENTRY["EnemyAgentHandler → IntentArbiter.tryAdoptRemoteIntent()"]
     ENTRY --> CLOSED{"runtime closed?"}
     CLOSED -->|是| IDERR["IDENTITY_MISMATCH"]
     CLOSED -->|否| VALIDATE["DecisionValidator.validate()"]
@@ -481,23 +518,23 @@ flowchart LR
 |---|---|
 | Safety Reflex (`P1`) | 已启用 |
 | Visible Threat Reflex (`P2`) | 已启用 |
-| Active Intent Lease (`P3`) | 已启用；当前主要执行本地 Lease |
+| Active Intent Lease (`P3`) | 已启用；可执行本地或已校验的远程 Lease |
 | Local Fallback (`P4`) | 已启用 |
-| Remote Agent Lease | 校验和采纳代码已实现，但没有生产消息来源调用 |
+| Remote Agent Lease | 已在 poll 安全边界校验和采纳 |
 
 ---
 
-## 5. AgentSession 核心与尚未接线模块
+## 5. AgentSession 与生产接线
 
 ### 5.1 模块连接图
 
-实线表示已经实现的 Session/transport 关系；虚线表示生产接线或尚未实现的 Python 模块。
+实线表示当前正式运行路径中已经实现的关系。
 
 ```mermaid
 flowchart LR
-    POLL["Enemy.pollAgentMessages()"] -.-> SESSION["AgentSession<br/>生命周期与请求状态"]
-    COLLECT["Enemy.collectAgentUpdates()"] -.-> SESSION
-    CLOSE["Enemy.closeAgentRuntime()"] -.-> SESSION
+    POLL["Enemy.pollAgentMessages()"] --> SESSION["AgentSession<br/>生命周期与请求状态"]
+    COLLECT["Enemy.collectAgentUpdates()"] --> SESSION
+    CLOSE["Enemy.closeAgentRuntime()"] --> SESSION
 
     SESSION --> INQ["bounded inbound queue"]
     SESSION --> OUTQ["bounded outbound queue"]
@@ -506,18 +543,18 @@ flowchart LR
     SESSION --> TRANSPORT["AgentTransport<br/>生命周期控制面"]
 
     INQ --> HANDLER
-    HANDLER -.-> VALIDATOR["DecisionValidator<br/>已实现"]
+    HANDLER --> VALIDATOR["DecisionValidator<br/>已实现"]
     VALIDATOR --> ARBITER["IntentArbiter<br/>已实现"]
 
     OUTQ --> IO["SocketTransport<br/>TCP IO worker"]
     TRANSPORT --> IO
     IO --> TCP["persistent NDJSON TCP"]
-    TCP -.-> PY["Python Agent runtime"]
-    PY -.-> TCP
+    TCP --> PY["Python Agent runtime"]
+    PY --> TCP
     IO --> INQ
 
-    COLLECT -.->|"ObservationEnvelope<br/>ActionOutcome"| OUTQ
-    INQ -.->|"submit_intent<br/>cancel_ack"| POLL
+    COLLECT -->|"ObservationEnvelope<br/>ActionOutcome"| OUTQ
+    INQ -->|"submit_intent<br/>cancel_ack"| POLL
 ```
 
 ### 5.2 模块状态
@@ -530,13 +567,14 @@ flowchart LR
 | `AgentSession` | **核心已实现** | single in-flight、deadline、cancel、队列和生命周期 |
 | `AgentSessionConfig` | **已实现** | 地址、容量、deadline 和重连配置快照 |
 | `AgentHandler` | **已实现** | 在游戏线程接收消息，并显式返回 intent 接受/拒绝结果 |
-| `MonotonicClock` | **已实现** | 为 deadline 提供可测试的单调时间 |
+| `MonotonicClock` | **已实现** | 为 deadline 提供不受系统时间回拨影响的单调时间 |
 | `AgentTransport` | **已实现** | `SocketTransport` 绑定 endpoint、请求物理重建、永久关闭 transport |
 | inbound/outbound queues | **已实现** | 隔离游戏线程与 IO，提供有界背压 |
 | TCP IO worker | **已实现** | 唯一操作 connect/read/write 的线程；短读超时保证双向推进 |
-| Python Agent runtime | **未实现** | 消费 observation/feedback，返回受限 intent |
+| Python Agent runtime | **端到端接通** | 可消费 observation/feedback 并返回受限 intent；故障模式不会阻塞游戏线程 |
 
-更完整的 Session 状态机、失败语义和测试说明见 [`session.md`](session.md)。
+更完整的 Session 状态机和失败语义见 [`session.md`](session.md)；
+外部 runtime、Python brain 和跨语言边界见 [`agentarchitecture.md`](agentarchitecture.md)。
 
 ### 5.3 当前 Session API
 
@@ -597,7 +635,7 @@ public interface MonotonicClock {
 
 ### 5.4 接入当前 Game Loop 的位置
 
-未来实现不能另建一套 Game Loop，只能填入当前 seam：
+当前实现没有另建第二套 Game Loop，而是在现有循环的四个固定位置处理 Agent：
 
 | 当前位置 | 接入行为 |
 |----------|----------|
@@ -700,4 +738,5 @@ wall-clock 不能参与 canonical 正确性判断。
 11. [`EntityManager.flushPendingChanges`](byog/Entity/EntityManager.java) 与
     [`PerceptionSystem.computeObservation`](byog/Perception/PerceptionSystem.java)
 
-读完第 4 项可以理解 Game Loop；读完第 8 项可以理解当前双速控制链；第 10 项说明已经实现但尚未接入 Game/Enemy 的 Session 核心。
+读完第 4 项可以理解 Game Loop 与 Session 接线；读完第 8 项可以理解当前双速控制链；
+第 10 项说明 Session 的请求、超时、背压和重连状态机。

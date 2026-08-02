@@ -1,5 +1,13 @@
 package byog.Test;
 
+import byog.AI.AiTickContext;
+import byog.AI.AiTickLoop;
+import byog.Bridge.AgentProtocol;
+import byog.Bridge.AgentSession;
+import byog.Bridge.AgentSessionConfig;
+import byog.Bridge.AgentTransport;
+import byog.Bridge.IdGenerator;
+import byog.Bridge.MonotonicClock;
 import byog.Entity.EntityManager;
 import byog.Entity.Enemy;
 import byog.Entity.Player;
@@ -8,6 +16,8 @@ import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
 import byog.lab5.Position;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
 /**
@@ -19,24 +29,36 @@ public final class EncounterHarness {
         LEGACY(
                 AgentTrace.PHASE0_SCHEMA_VERSION,
                 "baseline-two-guards",
+                false,
                 false),
         PRIVATE_PERCEPTION(
                 AgentTrace.SCHEMA_VERSION,
                 "baseline-two-guards-perception",
+                true,
+                false),
+        AGENT_BRIDGE(
+                AgentTrace.AGENT_SCHEMA_VERSION,
+                "agent-two-guards",
+                true,
                 true);
 
         private final String traceSchema;
         private final String scenarioId;
         private final boolean perceptionEnabled;
+        private final boolean productionTickLoop;
 
-        Mode(String traceSchema, String scenarioId, boolean perceptionEnabled) {
+        Mode(String traceSchema, String scenarioId,
+             boolean perceptionEnabled, boolean productionTickLoop) {
             this.traceSchema = traceSchema;
             this.scenarioId = scenarioId;
             this.perceptionEnabled = perceptionEnabled;
+            this.productionTickLoop = productionTickLoop;
         }
     }
 
     private static final int SCENARIO_VERSION = 1;
+    private static final String RUN_ID = "agent-harness-run";
+    private static final int FLOOR_ID = 1;
     private static final String[] BASELINE_ASCII = {
         "#################",
         "#.......#......>#",
@@ -56,6 +78,11 @@ public final class EncounterHarness {
     private final EntityManager entityMgr;
     private final Position stairsPos;
     private final AgentTrace.InMemorySink traceSink;
+    private final FakeClock clock;
+    private final AgentSession guardASession;
+    private final AgentSession guardBSession;
+    private long guardAInboundSequence;
+    private long guardBInboundSequence;
     private long logicalTick;
 
     private EncounterHarness(Mode mode, TETile[][] world, Player player,
@@ -71,6 +98,19 @@ public final class EncounterHarness {
         this.traceSink = new AgentTrace.InMemorySink();
         guardA.setPerceptionEnabled(mode.perceptionEnabled);
         guardB.setPerceptionEnabled(mode.perceptionEnabled);
+        if (mode.productionTickLoop) {
+            clock = new FakeClock();
+            guardASession = newSession(guardA, clock);
+            guardBSession = newSession(guardB, clock);
+            guardA.attachAgentSession(guardASession);
+            guardB.attachAgentSession(guardBSession);
+            guardASession.transportEndpoint().markConnected(0);
+            guardBSession.transportEndpoint().markConnected(0);
+        } else {
+            clock = null;
+            guardASession = null;
+            guardBSession = null;
+        }
     }
 
     public static EncounterHarness legacyV1() {
@@ -80,6 +120,11 @@ public final class EncounterHarness {
     public static EncounterHarness privatePerceptionV1() {
         return fromAscii(
                 Mode.PRIVATE_PERCEPTION, BASELINE_ASCII, 1000, 101, 202);
+    }
+
+    public static EncounterHarness agentBridgeV1() {
+        return fromAscii(
+                Mode.AGENT_BRIDGE, BASELINE_ASCII, 1000, 101, 202);
     }
 
     public static EncounterHarness fromAscii(
@@ -167,6 +212,13 @@ public final class EncounterHarness {
     }
 
     public void step() {
+        if (mode.productionTickLoop) {
+            AiTickContext tickContext = new AiTickContext(
+                    RUN_ID, FLOOR_ID, logicalTick, null, traceSink);
+            AiTickLoop.run(tickContext, world, entityMgr, player);
+            logicalTick++;
+            return;
+        }
         AgentTrace.Context guardAContext = context("guard-a");
         AgentTrace.Context guardBContext = context("guard-b");
         guardA.updateAI(world, entityMgr, player, guardAContext, traceSink);
@@ -193,6 +245,96 @@ public final class EncounterHarness {
 
     public String canonicalTraceJson() {
         return traceSink.toCanonicalJson();
+    }
+
+    public String canonicalTrace() {
+        return canonicalTraceJson();
+    }
+
+    /** Advances only the injected monotonic clock. */
+    public void advanceClockMs(long milliseconds) {
+        requireAgentMode();
+        clock.advanceMilliseconds(milliseconds);
+    }
+
+    /** Delivers one already-decoded inbound message to the named Agent. */
+    public AgentSession.InboundEnqueueResult injectInbound(
+            String stableAgentId, AgentProtocol.Envelope envelope) {
+        AgentSession session = session(stableAgentId);
+        return session.transportEndpoint().offerInbound(
+                envelope, logicalTick);
+    }
+
+    /** Drains messages that the named Session has queued for its transport. */
+    public List<AgentProtocol.Envelope> drainOutbound(
+            String stableAgentId) {
+        AgentSession session = session(stableAgentId);
+        List<AgentProtocol.Envelope> messages = new ArrayList<>();
+        AgentProtocol.Envelope envelope;
+        while ((envelope = session.transportEndpoint().pollOutbound())
+                != null) {
+            messages.add(envelope);
+        }
+        return messages;
+    }
+
+    /** Builds a valid deterministic PATROL response for an observation request. */
+    public AgentProtocol.Envelope patrolResponse(
+            String stableAgentId, AgentProtocol.Envelope request) {
+        requireAgentMode();
+        if (request.type != AgentProtocol.MessageType.OBSERVATION
+                || !(request.data
+                instanceof AgentProtocol.ObservationData observation)) {
+            throw new IllegalArgumentException(
+                    "request must contain observation data");
+        }
+        AgentProtocol.IntentData intent = new AgentProtocol.IntentData(
+                AgentProtocol.INTENT_VERSION,
+                AgentProtocol.Skill.PATROL,
+                java.util.Collections.emptyMap(),
+                0.75,
+                10,
+                new AgentProtocol.InterruptPolicyData(true, true, true));
+        AgentProtocol.SubmitIntentData response =
+                new AgentProtocol.SubmitIntentData(
+                        observation.decisionId(),
+                        observation.observationSeq(),
+                        observation.requestGeneration(), intent);
+        long sequence = nextInboundSequence(stableAgentId);
+        return new AgentProtocol.Envelope(
+                AgentProtocol.ENVELOPE_VERSION,
+                stableAgentId + "-inbound-" + sequence,
+                sequence,
+                request.runId,
+                request.floorId,
+                request.agentId,
+                request.sessionEpoch,
+                logicalTick,
+                AgentProtocol.MessageType.SUBMIT_INTENT,
+                response);
+    }
+
+    /** Returns the deterministic Session for one scenario role. */
+    public AgentSession session(String stableAgentId) {
+        requireAgentMode();
+        if ("guard-a".equals(stableAgentId)) {
+            return guardASession;
+        }
+        if ("guard-b".equals(stableAgentId)) {
+            return guardBSession;
+        }
+        throw new IllegalArgumentException(
+                "unknown scenario agent: " + stableAgentId);
+    }
+
+    /** Closes only the Sessions owned by this harness. */
+    public void close() {
+        if (guardASession != null) {
+            guardASession.close();
+        }
+        if (guardBSession != null) {
+            guardBSession.close();
+        }
     }
 
     public String canonicalState() {
@@ -259,5 +401,64 @@ public final class EncounterHarness {
 
     public int height() {
         return world[0].length;
+    }
+
+    private static AgentSession newSession(
+            Enemy enemy, MonotonicClock clock) {
+        AgentSessionConfig config = AgentSessionConfig.builder()
+                .enabled(true)
+                .softDeadlineMs(100)
+                .hardDeadlineMs(200)
+                .cancelGraceMs(50)
+                .outboundCapacity(8)
+                .inboundCapacity(8)
+                .pendingEventCapacity(8)
+                .maxInboundPerPoll(8)
+                .heartbeatTicks(20)
+                .build();
+        AgentProtocol.Identity identity = new AgentProtocol.Identity(
+                RUN_ID, FLOOR_ID, enemy.getAgentId(), 0, 0);
+        return new AgentSession(
+                config, identity, clock,
+                new IdGenerator.DeterministicIdGenerator(
+                        enemy.getAgentId() + "-decision",
+                        enemy.getAgentId() + "-message"),
+                AgentTransport.noOp());
+    }
+
+    private long nextInboundSequence(String stableAgentId) {
+        if ("guard-a".equals(stableAgentId)) {
+            return guardAInboundSequence++;
+        }
+        if ("guard-b".equals(stableAgentId)) {
+            return guardBInboundSequence++;
+        }
+        throw new IllegalArgumentException(
+                "unknown scenario agent: " + stableAgentId);
+    }
+
+    private void requireAgentMode() {
+        if (!mode.productionTickLoop) {
+            throw new IllegalStateException(
+                    "operation requires an Agent bridge harness");
+        }
+    }
+
+    private static final class FakeClock implements MonotonicClock {
+        private long nowNanos;
+
+        @Override
+        public long nanoTime() {
+            return nowNanos;
+        }
+
+        private void advanceMilliseconds(long milliseconds) {
+            if (milliseconds < 0) {
+                throw new IllegalArgumentException(
+                        "milliseconds must be non-negative");
+            }
+            nowNanos = Math.addExact(
+                    nowNanos, Math.multiplyExact(milliseconds, 1_000_000L));
+        }
     }
 }

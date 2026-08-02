@@ -4,6 +4,10 @@ import byog.Action.AttackAction;
 import byog.Action.MoveAction;
 import byog.AI.AiTickContext;
 import byog.AI.AiTickLoop;
+import byog.Bridge.AgentProtocol;
+import byog.Bridge.AgentSession;
+import byog.Bridge.AgentSessionConfig;
+import byog.Bridge.MonotonicClock;
 import byog.Common.Difficulty;
 import byog.Common.Direction;
 import byog.Entity.Entity;
@@ -58,6 +62,22 @@ public class Game {
     private String runId;
     private long logicalTick = 0;
     private boolean agentRuntimeEnabled;
+    private AgentSessionConfig agentSessionConfig;
+    private final boolean agentSessionConfigInjected;
+
+    public Game() {
+        agentSessionConfig = null;
+        agentSessionConfigInjected = false;
+    }
+
+    public Game(AgentSessionConfig agentSessionConfig) {
+        if (agentSessionConfig == null) {
+            throw new IllegalArgumentException(
+                    "agentSessionConfig must not be null");
+        }
+        this.agentSessionConfig = agentSessionConfig;
+        this.agentSessionConfigInjected = true;
+    }
 
     // 游戏状态枚举
     private enum GameState {
@@ -195,19 +215,23 @@ public class Game {
                 if (c == '1' || c == 'e') {
                     difficulty = Difficulty.EASY;
                     gameConfig = new GameConfig(difficulty);
+                    applyLoadedGameConfig();
                     return GameState.SEED_INPUT;
                 } else if (c == '2' || c == 'b') {
                     difficulty = Difficulty.BALANCED;
                     gameConfig = new GameConfig(difficulty);
+                    applyLoadedGameConfig();
                     return GameState.SEED_INPUT;
                 } else if (c == '3' || c == 'h') {
                     difficulty = Difficulty.HARDCORE;
                     gameConfig = new GameConfig(difficulty);
+                    applyLoadedGameConfig();
                     return GameState.SEED_INPUT;
                 }
                 // 旧格式兼容：非123字符默认选 BALANCED 并回退到字符处理
                 difficulty = Difficulty.BALANCED;
                 gameConfig = new GameConfig(difficulty);
+                applyLoadedGameConfig();
                 Logger.info("Unknown difficulty key '%c', using BALANCED.", c);
                 if (Character.isDigit(c)) {
                     seedStr.append(c);
@@ -672,6 +696,7 @@ public class Game {
 
         placeStairs(result, player.getPosition(), floorLevel);
         if (agentRuntimeEnabled) {
+            attachEnemySessions();
             primeEnemyObservations();
         }
         frameCounter = 0;
@@ -750,7 +775,11 @@ public class Game {
         String savedDifficulty = (String) data.extraData.get("difficulty");
         difficulty = Difficulty.fromKey(savedDifficulty);
         gameConfig = new GameConfig(difficulty);
+        applyLoadedGameConfig();
 
+        if (agentRuntimeEnabled) {
+            closeAllEnemyRuntimes();
+        }
         WorldGenResult result = generateWorld(data.seed, floorLevel);
         entityMgr = new EntityManager();
 
@@ -781,7 +810,10 @@ public class Game {
                         agentId = (s.agentId != null) ? s.agentId : "entity-" + states.indexOf(s);
                     }
                     Enemy enemy = new Enemy(new Position(s.x, s.y), Tileset.ENEMY,
-                            s.hp, s.sightRange, mvInterval, atk, atkVariance, random, agentId);
+                            s.hp, s.sightRange, mvInterval, atk, atkVariance,
+                            random, agentId,
+                            gameConfig.agentActionQueueLowWater,
+                            gameConfig.agentActionQueueHighWater);
                     enemy.setPerceptionEnabled(true);
                     e = enemy;
                 } else {
@@ -813,7 +845,43 @@ public class Game {
     private void beginAgentRun() {
         runId = "run-" + UUID.randomUUID();
         logicalTick = 0;
+        attachEnemySessions();
         primeEnemyObservations();
+    }
+
+    /**
+     * Creates one independent enabled session for every living enemy.
+     */
+    private void attachEnemySessions() {
+        if (agentSessionConfig == null || !agentSessionConfig.isEnabled()) {
+            return;
+        }
+        ensureRunIdentity();
+        for (Enemy enemy : snapshotEnemies()) {
+            if (!enemy.isAlive()) {
+                continue;
+            }
+            AgentSessionConfig enemyConfig = agentSessionConfig.toBuilder()
+                    .capabilities(
+                            agentSessionConfig.getCapabilities()
+                                    .supportedSkills(),
+                            enemy.getSightRange(),
+                            enemy.getAttackDamage(),
+                            enemy.getMoveInterval())
+                    .build();
+            AgentProtocol.Identity identity = new AgentProtocol.Identity(
+                    runId, floorLevel, enemy.getAgentId(), 0, 0);
+            AgentSession session = new AgentSession(
+                    enemyConfig, identity, MonotonicClock.systemClock());
+            try {
+                enemy.attachAgentSession(session);
+            } catch (RuntimeException exception) {
+                session.close();
+                Logger.error(
+                        "Failed to attach agent session for %s: %s",
+                        enemy.getAgentId(), exception.getMessage());
+            }
+        }
     }
 
     /**
@@ -854,6 +922,13 @@ public class Game {
     private void ensureRunIdentity() {
         if (runId == null || runId.isEmpty()) {
             runId = "run-" + UUID.randomUUID();
+        }
+    }
+
+    /** Applies file-backed Agent settings unless a caller injected an override. */
+    private void applyLoadedGameConfig() {
+        if (!agentSessionConfigInjected) {
+            agentSessionConfig = gameConfig.toAgentSessionConfig();
         }
     }
 

@@ -15,7 +15,10 @@ import byog.AI.ReflexController;
 import byog.AI.ReflexObservation;
 import byog.AI.RuleBasedBrain;
 import byog.AI.StrategicIntent;
+import byog.Bridge.AgentHandler;
 import byog.Bridge.AgentProtocol;
+import byog.Bridge.AgentProtocolCodec;
+import byog.Bridge.AgentSession;
 import byog.Helper.Logger;
 import byog.Helper.MathHelper;
 import byog.IO.GameConfig;
@@ -28,6 +31,7 @@ import byog.lab5.Position;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Random;
 
 public class Enemy extends Entity {
@@ -47,11 +51,11 @@ public class Enemy extends Entity {
     private long observationSeq = 0;
     /** 最近一次私有感知计算的可见性遮罩，perceptionEnabled=false 时为 null */
     private boolean[][] cachedVisibleMask;
-    /** 上一个 commit/collect 阶段生成的不可变私有观察。 */
+    /** 上一个 commit/collect 周期生成的不可变私有观察。 */
     private ObservationEnvelope latestObservation;
-    /** 从 latestObservation 提取、供下一阶段快脑使用的有限切片。 */
+    /** 从 latestObservation 提取、供下一次快脑决策使用的有限切片。 */
     private ReflexObservation latestReflexObservation;
-    /** execute 阶段产生、等待 commit 后补全的动作记录。 */
+    /** execute 产生、等待 commit 后补全的动作记录。 */
     private PendingAction pendingAction;
     /** 最近一个已经在 commit 后完成的动作结果。 */
     private ActionOutcome lastActionOutcome;
@@ -62,10 +66,28 @@ public class Enemy extends Entity {
     private boolean agentRuntimeClosed;
     private final IntentArbiter arbiter;
     private final ReflexController reflexController;
+    private final AgentHandler agentHandler;
+    private AgentSession agentSession;
+    private TETile[][] committedWorldForAgentValidation;
+    private AiTickContext activeAgentPollContext;
+    private boolean actionQueueWasLow;
+    private boolean lastReflexOverrideState;
+    private long lastAgentRequestTick;
+    private long lastSessionLifecycleSequence;
 
     public Enemy(Position position, TETile tile, int hp, int sightRange,
                  int moveInterval, int attackDamage, int damageVariance,
                  Random random, String agentId) {
+        this(position, tile, hp, sightRange, moveInterval,
+                attackDamage, damageVariance, random, agentId,
+                ActionQueue.DEFAULT_LOW_WATER,
+                ActionQueue.DEFAULT_HIGH_WATER);
+    }
+
+    public Enemy(Position position, TETile tile, int hp, int sightRange,
+                 int moveInterval, int attackDamage, int damageVariance,
+                 Random random, String agentId,
+                 int actionQueueLowWater, int actionQueueHighWater) {
         super(position, tile);
         this.hp = hp;
         this.sightRange = sightRange;
@@ -74,7 +96,8 @@ public class Enemy extends Entity {
         this.damageVariance = damageVariance;
         this.tickCounter = 0;
         this.random = random;
-        this.actionQueue = new ActionQueue();
+        this.actionQueue = new ActionQueue(
+                actionQueueLowWater, actionQueueHighWater);
         this.brain = new RuleBasedBrain(sightRange, random);
         this.agentId = agentId;
         this.perceptionEnabled = false;
@@ -82,6 +105,11 @@ public class Enemy extends Entity {
         this.agentRuntimeClosed = false;
         this.arbiter = new IntentArbiter();
         this.reflexController = new ReflexController();
+        this.agentHandler = new EnemyAgentHandler();
+        this.actionQueueWasLow = false;
+        this.lastReflexOverrideState = false;
+        this.lastAgentRequestTick = Long.MIN_VALUE;
+        this.lastSessionLifecycleSequence = -1;
     }
 
     /**
@@ -232,8 +260,8 @@ public class Enemy extends Entity {
      * 在一次 AI tick 开始时轮询并接收 Agent 消息。
      *
      * <p>该方法必须保持非阻塞，避免单个敌人的消息处理拖慢整个游戏循环。
-     * 当前尚未挂接 {@code AgentSession}，因此只保留生命周期边界并校验上下文；
-     * Agent 运行时已经关闭时直接返回。</p>
+     * Session 只在这里把已解析的入站消息交给 Validator 和 Arbiter；Socket IO
+     * 始终由 transport worker 独立完成。Agent 运行时已经关闭时直接返回。</p>
      *
      * @param context 当前 AI tick 的运行身份、楼层和逻辑时钟
      * @throws IllegalArgumentException Agent 运行时尚未关闭但 {@code context} 为 null
@@ -244,6 +272,23 @@ public class Enemy extends Entity {
         }
         if (context == null) {
             throw new IllegalArgumentException("context must not be null");
+        }
+        AgentSession session = agentSession;
+        if (session == null || session.isClosed()) {
+            return;
+        }
+        if (!sessionMatchesContext(session, context)) {
+            disableMismatchedSession(session, context);
+            return;
+        }
+
+        activeAgentPollContext = context;
+        try {
+            session.pollInbound(agentHandler, context.getLogicalTick());
+            session.advanceRequestLifecycle(context.getLogicalTick());
+            recordSessionLifecycle(context, session);
+        } finally {
+            activeAgentPollContext = null;
         }
     }
 
@@ -301,12 +346,16 @@ public class Enemy extends Entity {
 
         // 反射是否接管
         boolean overrideWasActive = arbiter.isInReflexOverride();
+        String previousOverrideReason = arbiter.getOverrideReason();
         String overrideReason = null;  // 初始化为空内容
 
         // Decision: 仲裁结果 (Arbiter 只选择控制来源，具体意图仍由对应控制器生成)
         ReflexObservation reflex = latestReflexObservation;    // 反射（快脑观察）
         IntentArbiter.ArbiterDecision decision =             // decide出仲裁结果，返回决策等级
                 arbiter.decide(reflex, context.getLogicalTick());
+        recordReflexTransition(
+                context, overrideWasActive, previousOverrideReason,
+                decision.getLevel().name());
         AgentProtocol.DecisionSource source = AgentProtocol.DecisionSource.LOCAL_FALLBACK;  // 初始化，默认值，兜底
         String decisionId = currentDecisionId;   // 初始化为与上一次execute一样
 
@@ -395,6 +444,18 @@ public class Enemy extends Entity {
                 arbiter.adoptLocalFallbackLease(intent, currentDecisionId,
                         latestObservation.getObservationSeq(),
                         context.getLogicalTick(), 30);
+                recordAgentEvent(context,
+                        AgentTrace.agentEvent(
+                                AgentTrace.EventType.LOCAL_BRAIN_TAKEOVER,
+                                context.getRunId(), context.getFloorId(),
+                                agentId, context.getLogicalTick())
+                                .observationSequence(
+                                        latestObservation.getObservationSeq())
+                                .decision(
+                                        currentDecisionId,
+                                        AgentProtocol.DecisionSource
+                                                .LOCAL_FALLBACK.name())
+                                .execution(decision.getLevel().name()));
                 List<Action> actions = ClassicalPlanner.translateBounded(
                         intent, getPosition(), getId(), world,
                         entityMgr, random, actionQueue.getHighWater());
@@ -416,6 +477,22 @@ public class Enemy extends Entity {
 
         // 此处只执行并暂存原始结果；提交后的最终状态由 collectAgentUpdates 补全。
         Position before = copyPosition(getPosition());
+        int actionIndex = actionsExecutedForDecision + 1;
+        recordAgentEvent(context,
+                withSession(
+                        AgentTrace.agentEvent(
+                                AgentTrace.EventType.ACTION_ATTEMPTED,
+                                context.getRunId(), context.getFloorId(),
+                                agentId, context.getLogicalTick())
+                                .observationSequence(
+                                        latestObservation.getObservationSeq())
+                                .decision(decisionId, source.name())
+                                .override(overrideReason)
+                                .execution(decision.getLevel().name())
+                                .action(actionIndex,
+                                        action.getClass().getSimpleName(),
+                                        null, before, null),
+                        agentSession));
         Action.ActionResult result = action.execute(world, this);
         actionsExecutedForDecision++;
         pendingAction = new PendingAction(
@@ -479,31 +556,343 @@ public class Enemy extends Entity {
         latestObservation = committedObservation;
         latestReflexObservation = ReflexObservation.from(committedObservation);
         cachedVisibleMask = committedObservation.getVisibleMask();
+        committedWorldForAgentValidation = world;
+        recordAgentEvent(context,
+                withSession(
+                        AgentTrace.agentEvent(
+                                AgentTrace.EventType.OBSERVATION_GENERATED,
+                                context.getRunId(), context.getFloorId(),
+                                agentId, context.getLogicalTick())
+                                .observation(
+                                        committedObservation.getObservationSeq(),
+                                        committedObservation.getVisiblePlayer()
+                                                != null,
+                                        committedObservation
+                                                .getVisibleEntities().size(),
+                                        committedObservation
+                                                .getVisibleTiles().size()),
+                        agentSession));
 
+        ActionOutcome completedOutcome = null;
         if (pendingAction != null) {
             // 使用提交后的最终位置和生命值补全 Action Outcome。
-            lastActionOutcome = new ActionOutcome(
+            completedOutcome = new ActionOutcome(
                     pendingAction.runId, pendingAction.floorId, agentId,
                     pendingAction.logicalTick, pendingAction.decisionId,
                     pendingAction.actionIndex, pendingAction.actionType,
                     pendingAction.result, pendingAction.beforePosition,
                     getPosition(), hp, pendingAction.decisionSource,
                     pendingAction.overrideReason);
+            lastActionOutcome = completedOutcome;
             pendingAction = null;
+            recordAgentEvent(context,
+                    withSession(
+                            AgentTrace.agentEvent(
+                                    AgentTrace.EventType.ACTION_RESULT,
+                                    context.getRunId(), context.getFloorId(),
+                                    agentId, context.getLogicalTick())
+                                    .observationSequence(
+                                            committedObservation
+                                                    .getObservationSeq())
+                                    .execution("COMMITTED")
+                                    .action(completedOutcome),
+                            agentSession));
         }
+
+        publishAgentUpdates(
+                context, committedObservation, completedOutcome);
     }
 
     /**
-     * Idempotent lifecycle seam. The local runtime owns no socket or IO thread.
+     * Attaches one optional remote session whose stable identity belongs to this enemy.
+     */
+    public void attachAgentSession(AgentSession session) {
+        Objects.requireNonNull(session, "session");
+        if (agentRuntimeClosed) {
+            throw new IllegalStateException("agent runtime is already closed");
+        }
+        if (session.isClosed()) {
+            throw new IllegalArgumentException("session must be open");
+        }
+        if (!agentId.equals(session.getIdentity().agentId)) {
+            throw new IllegalArgumentException(
+                    "session agentId does not belong to this enemy");
+        }
+        if (agentSession == session) {
+            return;
+        }
+        if (agentSession != null && !agentSession.isClosed()) {
+            throw new IllegalStateException(
+                    "close or detach the existing session before replacement");
+        }
+        agentSession = session;
+        actionQueueWasLow = false;
+        lastAgentRequestTick = Long.MIN_VALUE;
+        lastSessionLifecycleSequence = -1;
+    }
+
+    /**
+     * Detaches the optional remote session without changing local fallback behavior.
+     */
+    public void detachAgentSession() {
+        agentSession = null;
+        activeAgentPollContext = null;
+        lastSessionLifecycleSequence = -1;
+    }
+
+    /**
+     * Idempotently closes the optional session and makes this enemy runtime terminal.
      */
     public void closeAgentRuntime() {
         if (agentRuntimeClosed) {
             return;
         }
         agentRuntimeClosed = true;
+        AgentSession session = agentSession;
+        agentSession = null;
+        activeAgentPollContext = null;
+        committedWorldForAgentValidation = null;
         actionQueue.clear();
         queuedDecisionId = null;
         pendingAction = null;
+        if (session != null) {
+            session.close();
+        }
+    }
+
+    /**
+     * Publishes committed feedback and starts or refreshes bounded strategic requests.
+     */
+    private void publishAgentUpdates(
+            AiTickContext context,
+            ObservationEnvelope observation,
+            ActionOutcome completedOutcome) {
+        AgentSession session = agentSession;
+        if (session == null || session.isClosed()
+                || !sessionMatchesContext(session, context)) {
+            return;
+        }
+
+        if (completedOutcome != null) {
+            AgentSession.EnqueueResult feedbackResult =
+                    session.sendActionFeedback(
+                    completedOutcome, context.getLogicalTick());
+            if (feedbackResult == AgentSession.EnqueueResult.ACCEPTED
+                    || feedbackResult == AgentSession.EnqueueResult.COALESCED) {
+                recordAgentEvent(context,
+                        withSession(
+                                AgentTrace.agentEvent(
+                                        AgentTrace.EventType
+                                                .ACTION_FEEDBACK_ENQUEUED,
+                                        context.getRunId(),
+                                        context.getFloorId(), agentId,
+                                        context.getLogicalTick())
+                                        .observationSequence(
+                                                observation.getObservationSeq())
+                                        .message(AgentProtocol.MessageType
+                                                .ACTION_FEEDBACK.name())
+                                        .validation(feedbackResult.name())
+                                        .action(completedOutcome),
+                                session));
+            }
+        }
+
+        List<AgentProtocol.WorldEventData> events =
+                collectRequestEvents(context, completedOutcome);
+        boolean lowNow = actionQueue.needRefill();
+        boolean crossedLowWater = lowNow && !actionQueueWasLow;
+        boolean firstObservation = session.getLatestObservation() == null;
+        boolean blocked = completedOutcome != null
+                && (completedOutcome.getResult() == Action.ActionResult.BLOCKED
+                || completedOutcome.getResult()
+                == Action.ActionResult.INTERRUPTED);
+        boolean reflexChanged = lastReflexOverrideState
+                != arbiter.isInReflexOverride();
+        boolean heartbeatDue = isHeartbeatDue(
+                session, context.getLogicalTick());
+
+        if (firstObservation || crossedLowWater || blocked
+                || reflexChanged || heartbeatDue) {
+            AgentSession.RequestStartResult result = session.requestIntent(
+                    observation, events, context.getLogicalTick());
+            if (result != AgentSession.RequestStartResult.CLOSED) {
+                lastAgentRequestTick = context.getLogicalTick();
+            }
+        } else {
+            for (AgentProtocol.WorldEventData event : events) {
+                session.sendWorldEvent(event, context.getLogicalTick());
+            }
+        }
+
+        actionQueueWasLow = lowNow;
+        lastReflexOverrideState = arbiter.isInReflexOverride();
+        recordSessionLifecycle(context, session);
+    }
+
+    /**
+     * Builds the minimal committed events needed to explain replanning triggers.
+     */
+    private List<AgentProtocol.WorldEventData> collectRequestEvents(
+            AiTickContext context, ActionOutcome completedOutcome) {
+        List<AgentProtocol.WorldEventData> events = new ArrayList<>();
+        AgentProtocol.PositionData position = new AgentProtocol.PositionData(
+                getPosition().x, getPosition().y);
+        if (completedOutcome != null
+                && (completedOutcome.getResult() == Action.ActionResult.BLOCKED
+                || completedOutcome.getResult()
+                == Action.ActionResult.INTERRUPTED)) {
+            events.add(new AgentProtocol.WorldEventData(
+                    AgentProtocol.WorldEventType.PLAN_BLOCKED.name(),
+                    context.getLogicalTick(), position, agentId));
+        }
+        if (lastReflexOverrideState != arbiter.isInReflexOverride()) {
+            AgentProtocol.WorldEventType type = arbiter.isInReflexOverride()
+                    ? AgentProtocol.WorldEventType.REFLEX_OVERRIDE_STARTED
+                    : AgentProtocol.WorldEventType.REFLEX_OVERRIDE_ENDED;
+            events.add(new AgentProtocol.WorldEventData(
+                    type.name(), context.getLogicalTick(), position, agentId));
+        }
+        return events;
+    }
+
+    /**
+     * Uses a conservative periodic observation refresh when no other trigger fires.
+     */
+    private boolean isHeartbeatDue(
+            AgentSession session, long logicalTick) {
+        if (lastAgentRequestTick == Long.MIN_VALUE) {
+            return false;
+        }
+        return logicalTick - lastAgentRequestTick
+                >= session.getHeartbeatTicks();
+    }
+
+    /**
+     * Rejects a session whose fixed run or floor identity cannot serve this tick.
+     */
+    private boolean sessionMatchesContext(
+            AgentSession session, AiTickContext context) {
+        AgentProtocol.Identity identity = session.getIdentity();
+        return agentId.equals(identity.agentId)
+                && context.getRunId().equals(identity.runId)
+                && context.getFloorId() == identity.floorId;
+    }
+
+    /**
+     * Closes an incorrectly routed remote session while preserving local fallback.
+     */
+    private void disableMismatchedSession(
+            AgentSession session, AiTickContext context) {
+        Logger.error(
+                "Closing mismatched agent session for %s at run=%s floor=%d",
+                agentId, context.getRunId(), context.getFloorId());
+        if (agentSession == session) {
+            agentSession = null;
+        }
+        session.close();
+    }
+
+    /**
+     * Adapts session callbacks to validation and lease adoption on the game thread.
+     */
+    private final class EnemyAgentHandler implements AgentHandler {
+        @Override
+        public IntentHandlingResult onIntentSubmitted(
+                AgentProtocol.SubmitIntentData data,
+                AgentProtocol.Envelope envelope,
+                AgentSession.RequestContext requestContext) {
+            AiTickContext context = activeAgentPollContext;
+            if (context == null || latestReflexObservation == null
+                    || committedWorldForAgentValidation == null) {
+                Logger.info(
+                        "Rejected agent intent for %s without committed validation context",
+                        agentId);
+                return IntentHandlingResult.REJECTED;
+            }
+
+            DecisionValidator.RequestExpectation expectation =
+                    new DecisionValidator.RequestExpectation(
+                            requestContext.getIdentity(),
+                            requestContext.getDecisionId(),
+                            requestContext.getObservationSeq(),
+                            requestContext.getRequestGeneration(),
+                            requestContext.getSourceObservation());
+            DecisionValidator.ValidationResult result =
+                    arbiter.tryAdoptRemoteIntent(
+                            data, envelope, expectation,
+                            latestReflexObservation,
+                            committedWorldForAgentValidation,
+                            context.getLogicalTick());
+            if (result == DecisionValidator.ValidationResult.ACCEPTED) {
+                AgentTrace.AgentEventBuilder adopted =
+                        AgentTrace.agentEvent(
+                                AgentTrace.EventType.INTENT_ADOPTED,
+                                context.getRunId(), context.getFloorId(),
+                                agentId, context.getLogicalTick())
+                                .observationSequence(data.observationSeq())
+                                .decision(
+                                        data.decisionId(),
+                                        AgentProtocol.DecisionSource
+                                                .REMOTE_AGENT.name())
+                                .message(AgentProtocol.MessageType
+                                        .SUBMIT_INTENT.name())
+                                .validation(result.name());
+                recordAgentEvent(
+                        context, withSession(adopted, agentSession));
+                if (currentDecisionSource
+                        == AgentProtocol.DecisionSource.LOCAL_FALLBACK) {
+                    recordAgentEvent(context,
+                            withSession(
+                                    AgentTrace.agentEvent(
+                                            AgentTrace.EventType
+                                                    .REMOTE_AGENT_RESUMED,
+                                            context.getRunId(),
+                                            context.getFloorId(), agentId,
+                                            context.getLogicalTick())
+                                            .observationSequence(
+                                                    data.observationSeq())
+                                            .decision(
+                                                    data.decisionId(),
+                                                    AgentProtocol.DecisionSource
+                                                            .REMOTE_AGENT
+                                                            .name()),
+                                    agentSession));
+                }
+            }
+            return result == DecisionValidator.ValidationResult.ACCEPTED
+                    ? IntentHandlingResult.ACCEPTED
+                    : IntentHandlingResult.REJECTED;
+        }
+
+        @Override
+        public void onCancelAcknowledged(
+                AgentProtocol.CancelAckData data,
+                AgentProtocol.Envelope envelope,
+                AgentSession.RequestContext cancelledRequest) {
+            Logger.debug(
+                    "Agent cancellation acknowledged for %s decision=%s",
+                    agentId, data.decisionId());
+        }
+
+        @Override
+        public void onProtocolRejected(
+                AgentProtocolCodec.ProtocolFailure failure) {
+            Logger.info(
+                    "Agent protocol rejected for %s: %s - %s",
+                    agentId, failure.reason(), failure.detail());
+            AiTickContext context = activeAgentPollContext;
+            if (context != null) {
+                recordAgentEvent(context,
+                        withSession(
+                                AgentTrace.agentEvent(
+                                        AgentTrace.EventType.PROTOCOL_ERROR,
+                                        context.getRunId(),
+                                        context.getFloorId(), agentId,
+                                        context.getLogicalTick())
+                                        .validation(failure.reason().name()),
+                                agentSession));
+            }
+        }
     }
 
     /**
@@ -556,6 +945,204 @@ public class Enemy extends Entity {
                 || action.logicalTick != context.getLogicalTick()) {
             throw new IllegalStateException(
                     "execute and collect must use the same AI tick context");
+        }
+    }
+
+    /**
+     * Emits an explicit begin/end event whenever reflex control changes.
+     */
+    private void recordReflexTransition(
+            AiTickContext context, boolean wasActive,
+            String previousReason, String executionState) {
+        boolean active = arbiter.isInReflexOverride();
+        if (active == wasActive) {
+            return;
+        }
+        AgentTrace.EventType eventType = active
+                ? AgentTrace.EventType.REFLEX_OVERRIDE_STARTED
+                : AgentTrace.EventType.REFLEX_OVERRIDE_ENDED;
+        String reason = active
+                ? arbiter.getOverrideReason() : previousReason;
+        IntentLease lease = arbiter.getCurrentLease();
+        String decisionId = lease == null
+                ? currentDecisionId : lease.getDecisionId();
+        AgentProtocol.DecisionSource source = lease == null
+                ? currentDecisionSource : lease.getDecisionSource();
+        AgentTrace.AgentEventBuilder event = AgentTrace.agentEvent(
+                eventType, context.getRunId(), context.getFloorId(),
+                agentId, context.getLogicalTick())
+                .override(reason)
+                .execution(executionState);
+        if (latestObservation != null) {
+            event.observationSequence(
+                    latestObservation.getObservationSeq());
+        }
+        if (decisionId != null) {
+            event.decision(decisionId,
+                    source == null ? null : source.name());
+        }
+        recordAgentEvent(context, withSession(event, agentSession));
+    }
+
+    /**
+     * Projects retained Session lifecycle events into the shared canonical sink.
+     */
+    private void recordSessionLifecycle(
+            AiTickContext context, AgentSession session) {
+        for (AgentSession.LifecycleEvent lifecycle
+                : session.getLifecycleEventsAfter(
+                lastSessionLifecycleSequence)) {
+            lastSessionLifecycleSequence = lifecycle.getSequence();
+            if (lifecycle.getType()
+                    == AgentSession.LifecycleEventType.CANCELLATION_STARTED
+                    && AgentSession.SupersedeReason.HARD_TIMEOUT.name()
+                    .equals(lifecycle.getDetail())) {
+                recordLifecycleEvent(
+                        context, lifecycle,
+                        AgentTrace.EventType.AGENT_HARD_TIMEOUT);
+            }
+            AgentTrace.EventType eventType =
+                    canonicalType(lifecycle);
+            if (eventType != null) {
+                recordLifecycleEvent(context, lifecycle, eventType);
+            }
+        }
+    }
+
+    /** Maps an internal Session transition to its public trace semantic. */
+    private static AgentTrace.EventType canonicalType(
+            AgentSession.LifecycleEvent lifecycle) {
+        return switch (lifecycle.getType()) {
+            case CONNECTION_CONNECTING, CONNECTION_OPENED,
+                    CONNECTION_LOST, CANCELLATION_GRACE_EXPIRED,
+                    SESSION_CLOSED ->
+                    AgentTrace.EventType.AGENT_SESSION_STATE_CHANGED;
+            case REQUEST_STARTED -> AgentTrace.EventType.AGENT_REQUEST_SENT;
+            case OBSERVATION_COALESCED ->
+                    AgentTrace.EventType.OUTBOUND_MESSAGE_COALESCED;
+            case AGENT_SLOW -> AgentTrace.EventType.AGENT_SLOW;
+            case CANCELLATION_STARTED ->
+                    AgentTrace.EventType.AGENT_CANCEL_SENT;
+            case CANCELLATION_ACKNOWLEDGED ->
+                    AgentTrace.EventType.AGENT_CANCEL_ACKED;
+            case INBOUND_REJECTED -> isStaleLifecycle(lifecycle)
+                    ? AgentTrace.EventType.STALE_RESPONSE_DROPPED
+                    : AgentTrace.EventType.PROTOCOL_ERROR;
+            case INBOUND_PROTOCOL_FATAL, TRANSPORT_CONTROL_FAILED ->
+                    AgentTrace.EventType.PROTOCOL_ERROR;
+            case OUTBOUND_LOW_PRIORITY_DROPPED,
+                    OUTBOUND_CRITICAL_REJECTED ->
+                    AgentTrace.EventType.OUTBOUND_MESSAGE_DROPPED;
+            case REQUEST_COMPLETED, REQUEST_REJECTED -> null;
+        };
+    }
+
+    /** Records one mapped lifecycle event with its transition-time state. */
+    private void recordLifecycleEvent(
+            AiTickContext context,
+            AgentSession.LifecycleEvent lifecycle,
+            AgentTrace.EventType eventType) {
+        long eventTick = lifecycle.getLogicalTick() < 0
+                ? context.getLogicalTick() : lifecycle.getLogicalTick();
+        AgentTrace.AgentEventBuilder event = AgentTrace.agentEvent(
+                eventType, context.getRunId(), context.getFloorId(),
+                agentId, eventTick)
+                .session(
+                        lifecycle.getSessionEpoch(),
+                        lifecycle.getRequestGeneration(),
+                        lifecycle.getConnectionState().name(),
+                        lifecycle.getRequestState().name())
+                .validation(lifecycleValidation(lifecycle));
+        if (lifecycle.getObservationSeq() != null) {
+            event.observationSequence(lifecycle.getObservationSeq());
+        }
+        if (lifecycle.getDecisionId() != null) {
+            event.decision(lifecycle.getDecisionId(), null);
+        }
+        String messageType = lifecycleMessageType(lifecycle);
+        if (messageType != null) {
+            event.message(messageType);
+        }
+        recordAgentEvent(context, event);
+    }
+
+    /** Returns a stable typed reason without copying diagnostic prose. */
+    private static String lifecycleValidation(
+            AgentSession.LifecycleEvent lifecycle) {
+        if (isStaleLifecycle(lifecycle)) {
+            return lifecycle.getDetail() != null
+                    && lifecycle.getDetail().contains("duplicate")
+                    ? "DUPLICATE_MESSAGE" : "STALE_IDENTITY";
+        }
+        return lifecycle.getType().name();
+    }
+
+    /** Identifies stale or duplicate inbound responses. */
+    private static boolean isStaleLifecycle(
+            AgentSession.LifecycleEvent lifecycle) {
+        String detail = lifecycle.getDetail();
+        return detail != null
+                && (detail.contains("stale")
+                || detail.contains("identity mismatch")
+                || detail.contains("duplicate"));
+    }
+
+    /** Infers the stable wire message involved in a Session transition. */
+    private static String lifecycleMessageType(
+            AgentSession.LifecycleEvent lifecycle) {
+        return switch (lifecycle.getType()) {
+            case REQUEST_STARTED, OBSERVATION_COALESCED ->
+                    AgentProtocol.MessageType.OBSERVATION.name();
+            case CANCELLATION_STARTED ->
+                    AgentProtocol.MessageType.CANCEL_REQUEST.name();
+            case CANCELLATION_ACKNOWLEDGED ->
+                    AgentProtocol.MessageType.CANCEL_ACK.name();
+            case INBOUND_REJECTED ->
+                    AgentProtocol.MessageType.SUBMIT_INTENT.name();
+            case OUTBOUND_LOW_PRIORITY_DROPPED -> {
+                String detail = lifecycle.getDetail();
+                if (detail != null && detail.contains("heartbeat")) {
+                    yield AgentProtocol.MessageType.HEARTBEAT.name();
+                }
+                yield AgentProtocol.MessageType.WORLD_EVENT.name();
+            }
+            case OUTBOUND_CRITICAL_REJECTED -> {
+                String detail = lifecycle.getDetail();
+                if (detail != null && detail.contains("feedback")) {
+                    yield AgentProtocol.MessageType.ACTION_FEEDBACK.name();
+                }
+                if (detail != null && detail.contains("cancel")) {
+                    yield AgentProtocol.MessageType.CANCEL_REQUEST.name();
+                }
+                yield AgentProtocol.MessageType.OBSERVATION.name();
+            }
+            default -> null;
+        };
+    }
+
+    /** Adds the current Session tuple to an Enemy-owned event. */
+    private static AgentTrace.AgentEventBuilder withSession(
+            AgentTrace.AgentEventBuilder event, AgentSession session) {
+        if (session == null) {
+            return event;
+        }
+        return event.session(
+                session.getSessionEpoch(),
+                session.getRequestGeneration(),
+                session.getConnectionState().name(),
+                session.getRequestState().name());
+    }
+
+    /** Builds and records one canonical event without affecting gameplay. */
+    private static void recordAgentEvent(
+            AiTickContext context,
+            AgentTrace.AgentEventBuilder event) {
+        try {
+            context.getTraceSink().record(event.build());
+        } catch (RuntimeException exception) {
+            Logger.error(
+                    "Agent trace record failed: %s",
+                    exception.getMessage());
         }
     }
 
@@ -733,7 +1320,10 @@ public class Enemy extends Entity {
             Random random = new Random((seed + "_enemy_" + i).hashCode());
             Enemy enemy = new Enemy(new Position(0, 0), Tileset.ENEMY,
                     config.enemyHp, config.enemySightRange, config.enemyMoveInterval,
-                    config.enemyAttack, config.enemyDamageVariance, random, "enemy-" + i);
+                    config.enemyAttack, config.enemyDamageVariance,
+                    random, "enemy-" + i,
+                    config.agentActionQueueLowWater,
+                    config.agentActionQueueHighWater);
             enemy.setPerceptionEnabled(true);   // 游戏运行时，默认开启感知模式
             Entity.initEntity(enemy, world, seed + "_pos_" + i);
 

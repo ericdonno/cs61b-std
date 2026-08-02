@@ -93,6 +93,31 @@ public final class AgentSessionConfig {
         return builder().build();
     }
 
+    /** Returns a builder initialized from this immutable configuration. */
+    public Builder toBuilder() {
+        return builder()
+                .enabled(enabled)
+                .host(host)
+                .port(port)
+                .softDeadlineMs(softDeadlineMs)
+                .hardDeadlineMs(hardDeadlineMs)
+                .cancelGraceMs(cancelGraceMs)
+                .outboundCapacity(outboundCapacity)
+                .inboundCapacity(inboundCapacity)
+                .pendingEventCapacity(pendingEventCapacity)
+                .maxInboundPerPoll(maxInboundPerPoll)
+                .maxFrameBytes(maxFrameBytes)
+                .reconnectInitialMs(reconnectInitialMs)
+                .reconnectMaxMs(reconnectMaxMs)
+                .shutdownJoinMs(shutdownJoinMs)
+                .heartbeatTicks(heartbeatTicks)
+                .capabilities(
+                        capabilities.supportedSkills(),
+                        capabilities.sightRange(),
+                        capabilities.attackDamage(),
+                        capabilities.moveInterval());
+    }
+
     public boolean isEnabled() {
         return enabled;
     }

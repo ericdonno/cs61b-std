@@ -1,6 +1,7 @@
 package byog.Trace;
 
 import byog.Action.Action;
+import byog.Action.ActionOutcome;
 import byog.AI.StrategicIntent;
 import byog.lab5.Position;
 
@@ -27,6 +28,7 @@ public final class AgentTrace {
      */
     public static final String PHASE0_SCHEMA_VERSION = "phase0.trace.v1";
     public static final String SCHEMA_VERSION = "phase1.trace.v1";
+    public static final String AGENT_SCHEMA_VERSION = "agent.trace.v1";
 
     /**
      * 一次敌人决策的四个生命周期节点。
@@ -38,7 +40,23 @@ public final class AgentTrace {
         OBSERVATION_GENERATED,
         INTENT_SELECTED,
         ACTION_ATTEMPTED,
-        ACTION_RESULT
+        ACTION_RESULT,
+        AGENT_SESSION_STATE_CHANGED,
+        AGENT_REQUEST_SENT,
+        AGENT_SLOW,
+        AGENT_HARD_TIMEOUT,
+        AGENT_CANCEL_SENT,
+        AGENT_CANCEL_ACKED,
+        STALE_RESPONSE_DROPPED,
+        INTENT_ADOPTED,
+        LOCAL_BRAIN_TAKEOVER,
+        REMOTE_AGENT_RESUMED,
+        REFLEX_OVERRIDE_STARTED,
+        REFLEX_OVERRIDE_ENDED,
+        ACTION_FEEDBACK_ENQUEUED,
+        OUTBOUND_MESSAGE_COALESCED,
+        OUTBOUND_MESSAGE_DROPPED,
+        PROTOCOL_ERROR
     }
 
     /**
@@ -114,6 +132,23 @@ public final class AgentTrace {
         public final Integer visibleEntityCount;
         public final Integer fovTileCount;
 
+        // ----- 异步 Agent 运行链路的稳定关联字段 -----
+        public final String runId;
+        public final Integer floorId;
+        public final String agentId;
+        public final Long sessionEpoch;
+        public final Long observationSeq;
+        public final String decisionId;
+        public final Long requestGeneration;
+        public final String messageType;
+        public final String connectionState;
+        public final String requestState;
+        public final String executionState;
+        public final String decisionSource;
+        public final String validationResult;
+        public final String overrideReason;
+        public final Integer actionIndex;
+
         private TraceEvent(String schemaVersion, String scenarioId, int scenarioVersion,
                       long logicalTick, Integer actionOrdinal, String actorKey,
                       EventType eventType, String inputKind,
@@ -145,6 +180,60 @@ public final class AgentTrace {
             this.visiblePlayer = visiblePlayer;
             this.visibleEntityCount = visibleEntityCount;
             this.fovTileCount = fovTileCount;
+            this.runId = null;
+            this.floorId = null;
+            this.agentId = null;
+            this.sessionEpoch = null;
+            this.observationSeq = null;
+            this.decisionId = null;
+            this.requestGeneration = null;
+            this.messageType = null;
+            this.connectionState = null;
+            this.requestState = null;
+            this.executionState = null;
+            this.decisionSource = null;
+            this.validationResult = null;
+            this.overrideReason = null;
+            this.actionIndex = null;
+        }
+
+        private TraceEvent(AgentEventBuilder builder) {
+            this.schemaVersion = AGENT_SCHEMA_VERSION;
+            this.scenarioId = null;
+            this.scenarioVersion = 0;
+            this.logicalTick = builder.logicalTick;
+            this.actionOrdinal = null;
+            this.actorKey = builder.agentId;
+            this.eventType = builder.eventType;
+            this.inputKind = null;
+            this.goal = null;
+            this.strategy = null;
+            this.targetX = null;
+            this.targetY = null;
+            this.actionType = builder.actionType;
+            this.rawActionResult = builder.rawActionResult;
+            this.beforeX = builder.beforeX;
+            this.beforeY = builder.beforeY;
+            this.afterX = builder.afterX;
+            this.afterY = builder.afterY;
+            this.visiblePlayer = builder.visiblePlayer;
+            this.visibleEntityCount = builder.visibleEntityCount;
+            this.fovTileCount = builder.fovTileCount;
+            this.runId = builder.runId;
+            this.floorId = builder.floorId;
+            this.agentId = builder.agentId;
+            this.sessionEpoch = builder.sessionEpoch;
+            this.observationSeq = builder.observationSeq;
+            this.decisionId = builder.decisionId;
+            this.requestGeneration = builder.requestGeneration;
+            this.messageType = builder.messageType;
+            this.connectionState = builder.connectionState;
+            this.requestState = builder.requestState;
+            this.executionState = builder.executionState;
+            this.decisionSource = builder.decisionSource;
+            this.validationResult = builder.validationResult;
+            this.overrideReason = builder.overrideReason;
+            this.actionIndex = builder.actionIndex;
         }
 
         /**
@@ -240,6 +329,155 @@ public final class AgentTrace {
     }
 
     /**
+     * 构造一条异步 Agent canonical 事件，并仅接受确定性字段。
+     */
+    public static AgentEventBuilder agentEvent(
+            EventType eventType, String runId, int floorId,
+            String agentId, long logicalTick) {
+        return new AgentEventBuilder(
+                eventType, runId, floorId, agentId, logicalTick);
+    }
+
+    /**
+     * 为不同事件类型逐步补充关联字段，避免庞大的位置参数构造器。
+     */
+    public static final class AgentEventBuilder {
+        private final EventType eventType;
+        private final String runId;
+        private final int floorId;
+        private final String agentId;
+        private final long logicalTick;
+        private Long sessionEpoch;
+        private Long observationSeq;
+        private String decisionId;
+        private Long requestGeneration;
+        private String messageType;
+        private String connectionState;
+        private String requestState;
+        private String executionState;
+        private String decisionSource;
+        private String validationResult;
+        private String overrideReason;
+        private Integer actionIndex;
+        private String actionType;
+        private String rawActionResult;
+        private Integer beforeX;
+        private Integer beforeY;
+        private Integer afterX;
+        private Integer afterY;
+        private Boolean visiblePlayer;
+        private Integer visibleEntityCount;
+        private Integer fovTileCount;
+
+        private AgentEventBuilder(
+                EventType eventType, String runId, int floorId,
+                String agentId, long logicalTick) {
+            if (eventType == null) {
+                throw new IllegalArgumentException("eventType must not be null");
+            }
+            if (runId == null || runId.trim().isEmpty()
+                    || agentId == null || agentId.trim().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "runId and agentId must not be blank");
+            }
+            if (floorId < 1 || logicalTick < 0) {
+                throw new IllegalArgumentException(
+                        "floorId must be positive and logicalTick non-negative");
+            }
+            this.eventType = eventType;
+            this.runId = runId;
+            this.floorId = floorId;
+            this.agentId = agentId;
+            this.logicalTick = logicalTick;
+        }
+
+        public AgentEventBuilder session(
+                long epoch, long generation,
+                String connection, String request) {
+            sessionEpoch = epoch;
+            requestGeneration = generation;
+            connectionState = connection;
+            requestState = request;
+            return this;
+        }
+
+        public AgentEventBuilder observation(
+                long sequence, boolean playerVisible,
+                int entityCount, int tileCount) {
+            observationSeq = sequence;
+            visiblePlayer = playerVisible;
+            visibleEntityCount = entityCount;
+            fovTileCount = tileCount;
+            return this;
+        }
+
+        public AgentEventBuilder observationSequence(long sequence) {
+            observationSeq = sequence;
+            return this;
+        }
+
+        public AgentEventBuilder decision(String id, String source) {
+            decisionId = id;
+            decisionSource = source;
+            return this;
+        }
+
+        public AgentEventBuilder message(String type) {
+            messageType = type;
+            return this;
+        }
+
+        public AgentEventBuilder execution(String state) {
+            executionState = state;
+            return this;
+        }
+
+        public AgentEventBuilder validation(String result) {
+            validationResult = result;
+            return this;
+        }
+
+        public AgentEventBuilder override(String reason) {
+            overrideReason = reason;
+            return this;
+        }
+
+        public AgentEventBuilder action(
+                int index, String type, String result,
+                Position before, Position after) {
+            actionIndex = index;
+            actionType = type;
+            rawActionResult = result;
+            if (before != null) {
+                beforeX = before.x;
+                beforeY = before.y;
+            }
+            if (after != null) {
+                afterX = after.x;
+                afterY = after.y;
+            }
+            return this;
+        }
+
+        public AgentEventBuilder action(ActionOutcome outcome) {
+            return decision(
+                    outcome.getDecisionId(),
+                    outcome.getDecisionSource().name())
+                    .override(outcome.getOverrideReason())
+                    .action(
+                            outcome.getActionIndex(),
+                            outcome.getActionType(),
+                            outcome.getResult().name(),
+                            outcome.getBeforePosition(),
+                            outcome.getAfterPosition());
+        }
+
+        public TraceEvent build() {
+            return new TraceEvent(this);
+        }
+    }
+
+    /**
      * trace 事件消费者。Enemy 只依赖这个最小接口，不需要知道事件最终存入内存、
      * 文件还是其他系统，从而保持事件生产与存储方式分离。
      */
@@ -288,6 +526,15 @@ public final class AgentTrace {
             for (int i = 0; i < events.size(); i++) {
                 TraceEvent e = events.get(i);
                 sb.append("  {");
+                if (AGENT_SCHEMA_VERSION.equals(e.schemaVersion)) {
+                    appendAgentEvent(sb, e, i);
+                    sb.append("}");
+                    if (i < events.size() - 1) {
+                        sb.append(",");
+                    }
+                    sb.append("\n");
+                    continue;
+                }
                 appendField(sb, "schemaVersion", e.schemaVersion, false);
                 appendField(sb, "scenarioId", e.scenarioId, false);
                 appendField(sb, "scenarioVersion", e.scenarioVersion, false);
@@ -323,6 +570,44 @@ public final class AgentTrace {
             return sb.toString();
         }
 
+        private void appendAgentEvent(
+                StringBuilder sb, TraceEvent e, int sequence) {
+            appendField(sb, "schemaVersion", e.schemaVersion, false);
+            appendField(sb, "runId", e.runId, false);
+            appendNullableInt(sb, "floorId", e.floorId, false);
+            appendField(sb, "agentId", e.agentId, false);
+            appendField(sb, "logicalTick", e.logicalTick, false);
+            appendField(sb, "sequence", sequence, false);
+            appendField(sb, "eventType", e.eventType.name(), false);
+            appendNullableLong(sb, "sessionEpoch", e.sessionEpoch, false);
+            appendNullableLong(sb, "observationSeq", e.observationSeq, false);
+            appendNullableStr(sb, "decisionId", e.decisionId, false);
+            appendNullableLong(
+                    sb, "requestGeneration", e.requestGeneration, false);
+            appendNullableStr(sb, "messageType", e.messageType, false);
+            appendNullableStr(
+                    sb, "connectionState", e.connectionState, false);
+            appendNullableStr(sb, "requestState", e.requestState, false);
+            appendNullableStr(
+                    sb, "executionState", e.executionState, false);
+            appendNullableStr(
+                    sb, "decisionSource", e.decisionSource, false);
+            appendNullableStr(
+                    sb, "validationResult", e.validationResult, false);
+            appendNullableStr(sb, "overrideReason", e.overrideReason, false);
+            appendNullableInt(sb, "actionIndex", e.actionIndex, false);
+            appendNullableStr(sb, "actionType", e.actionType, false);
+            appendNullableStr(
+                    sb, "rawActionResult", e.rawActionResult, false);
+            appendPosition(sb, "beforePosition", e.beforeX, e.beforeY, false);
+            appendPosition(sb, "afterPosition", e.afterX, e.afterY, false);
+            appendNullableBoolean(
+                    sb, "visiblePlayer", e.visiblePlayer, false);
+            appendNullableInt(
+                    sb, "visibleEntityCount", e.visibleEntityCount, false);
+            appendNullableInt(sb, "fovTileCount", e.fovTileCount, true);
+        }
+
         private void appendField(StringBuilder sb, String key, String value, boolean last) {
             sb.append("\"").append(key).append("\":\"")
                     .append(escapeJson(value)).append("\"");
@@ -356,6 +641,34 @@ public final class AgentTrace {
                 sb.append("null");
             } else {
                 sb.append(value);
+            }
+            if (!last) {
+                sb.append(",");
+            }
+        }
+
+        private void appendNullableLong(
+                StringBuilder sb, String key, Long value, boolean last) {
+            sb.append("\"").append(key).append("\":");
+            if (value == null) {
+                sb.append("null");
+            } else {
+                sb.append(value);
+            }
+            if (!last) {
+                sb.append(",");
+            }
+        }
+
+        private void appendPosition(
+                StringBuilder sb, String key,
+                Integer x, Integer y, boolean last) {
+            sb.append("\"").append(key).append("\":");
+            if (x == null || y == null) {
+                sb.append("null");
+            } else {
+                sb.append("{\"x\":").append(x)
+                        .append(",\"y\":").append(y).append("}");
             }
             if (!last) {
                 sb.append(",");

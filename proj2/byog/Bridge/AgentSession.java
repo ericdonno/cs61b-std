@@ -158,26 +158,42 @@ public final class AgentSession implements AutoCloseable {
      * Typed diagnostic event for deterministic lifecycle assertions.
      */
     public static final class LifecycleEvent {
+        private final long sequence;
         private final LifecycleEventType type;
         private final long logicalTick;
         private final long sessionEpoch;
         private final long requestGeneration;
+        private final Long observationSeq;
         private final String decisionId;
+        private final ConnectionState connectionState;
+        private final RequestState requestState;
         private final String detail;
 
         private LifecycleEvent(
+                long sequence,
                 LifecycleEventType type,
                 long logicalTick,
                 long sessionEpoch,
                 long requestGeneration,
+                Long observationSeq,
                 String decisionId,
+                ConnectionState connectionState,
+                RequestState requestState,
                 String detail) {
+            this.sequence = sequence;
             this.type = type;
             this.logicalTick = logicalTick;
             this.sessionEpoch = sessionEpoch;
             this.requestGeneration = requestGeneration;
+            this.observationSeq = observationSeq;
             this.decisionId = decisionId;
+            this.connectionState = connectionState;
+            this.requestState = requestState;
             this.detail = detail;
+        }
+
+        public long getSequence() {
+            return sequence;
         }
 
         public LifecycleEventType getType() {
@@ -196,8 +212,20 @@ public final class AgentSession implements AutoCloseable {
             return requestGeneration;
         }
 
+        public Long getObservationSeq() {
+            return observationSeq;
+        }
+
         public String getDecisionId() {
             return decisionId;
+        }
+
+        public ConnectionState getConnectionState() {
+            return connectionState;
+        }
+
+        public RequestState getRequestState() {
+            return requestState;
         }
 
         public String getDetail() {
@@ -327,6 +355,7 @@ public final class AgentSession implements AutoCloseable {
     private long requestGeneration;
     private long nextOutboundMessageSeq;
     private long highestInboundMessageSeq;
+    private long nextLifecycleEventSequence;
     private RequestContext currentRequest;
     private RequestContext cancelledRequest;
     private ObservationEnvelope latestObservation;
@@ -406,6 +435,11 @@ public final class AgentSession implements AutoCloseable {
         return requestGeneration;
     }
 
+    /** Returns the configured idle interval for observation refreshes. */
+    public long getHeartbeatTicks() {
+        return config.getHeartbeatTicks();
+    }
+
     public synchronized boolean isClosed() {
         return closed;
     }
@@ -444,6 +478,20 @@ public final class AgentSession implements AutoCloseable {
 
     public synchronized List<LifecycleEvent> getLifecycleEvents() {
         return List.copyOf(lifecycleEvents);
+    }
+
+    /**
+     * Returns retained lifecycle events newer than the supplied stable sequence.
+     */
+    public synchronized List<LifecycleEvent> getLifecycleEventsAfter(
+            long sequence) {
+        List<LifecycleEvent> result = new ArrayList<>();
+        for (LifecycleEvent event : lifecycleEvents) {
+            if (event.getSequence() > sequence) {
+                result.add(event);
+            }
+        }
+        return result;
     }
 
     public TransportEndpoint transportEndpoint() {
@@ -832,7 +880,9 @@ public final class AgentSession implements AutoCloseable {
                 decisionIdForTrace(), "transport connected");
         if (requestState == RequestState.NO_REQUEST
                 && latestObservation != null && requestPending) {
-            startLatestRequest(logicalTick);
+            long requestLogicalTick = logicalTick >= 0
+                    ? logicalTick : latestObservation.getObservedAtTurn();
+            startLatestRequest(requestLogicalTick);
         }
     }
 
@@ -1354,9 +1404,18 @@ public final class AgentSession implements AutoCloseable {
         if (lifecycleEvents.size() >= LIFECYCLE_EVENT_CAPACITY) {
             lifecycleEvents.removeFirst();
         }
+        Long observationSequence = null;
+        if (currentRequest != null) {
+            observationSequence = currentRequest.getObservationSeq();
+        } else if (cancelledRequest != null) {
+            observationSequence = cancelledRequest.getObservationSeq();
+        } else if (latestObservation != null) {
+            observationSequence = latestObservation.getObservationSeq();
+        }
         lifecycleEvents.addLast(new LifecycleEvent(
-                type, logicalTick, sessionEpoch, requestGeneration,
-                decisionId, detail));
+                nextLifecycleEventSequence++, type, logicalTick,
+                sessionEpoch, requestGeneration, observationSequence,
+                decisionId, connectionState, requestState, detail));
     }
 
     private AgentProtocol.Identity currentIdentity() {

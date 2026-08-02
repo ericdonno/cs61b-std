@@ -19,7 +19,9 @@ import org.junit.runners.Suite;
     Phase2ProtocolTest.class,
     Phase2AiTickTest.class,
     Phase2ArbiterTest.class,
-    AgentSessionTest.class
+    AgentSessionTest.class,
+    AgentTraceContractTest.class,
+    GameConfigTest.class
 })
 public final class Phase2TestSuite {
     private static Logger.Level previousLogLevel;

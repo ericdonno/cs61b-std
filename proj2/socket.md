@@ -2,12 +2,12 @@
 
 > 状态：TCP/NDJSON transport 当前实现说明
 >
-> 更新时间：2026-07-31
+> 更新时间：2026-08-02
 >
 > 范围：`SocketTransport`、唯一 IO worker、持久 TCP、NDJSON framing、UTF-8、
-> 双向调度、断线重连、指数退避、协议失败、terminal close 与测试 seam
+> 双向调度、断线重连、指数退避、协议失败与 terminal close
 >
-> 不包含：Python Agent runtime、`Enemy`/`Game` 生产接线、Intent 语义校验、
+> 不展开：Python Agent runtime、`Enemy`/`Game` 生产接线、Intent 语义校验、
 > Action 执行、模型调用和多 Agent 协作
 
 ---
@@ -16,6 +16,38 @@
 
 `SocketTransport` 是 `AgentSession` 的生产网络实现。它把 Session 的两个有界内存队列接到
 localhost TCP，但不理解 Enemy 应该采取什么策略，也不允许网络线程直接修改游戏世界。
+
+### 0.1 文中术语
+
+| 术语 | 在本文中的意思 |
+|------|----------------|
+| transport（传输层） | 负责建立连接和收发字节的组件，不处理游戏策略 |
+| Socket | 操作系统提供的网络连接读写接口；本文指 Java 与 Python 之间的一条连接 |
+| TCP | 可靠、有顺序的字节流协议；它保证字节顺序，但不会自动划分消息 |
+| localhost（本机地址） | `127.0.0.1`，表示 Java 和 Python 运行在同一台机器上 |
+| worker（工作线程） | 后台执行连接、读取和写出的专用线程 |
+| owner（所有者） | 唯一允许执行某类操作的线程或组件；这里 Socket IO 的 owner 是 worker |
+| persistent connection（持久连接） | 一次连接连续承载多条消息，而不是每条消息重新连接 |
+| NDJSON | 每行一个 JSON 对象的格式；换行符用于划分消息 |
+| frame / framing（帧 / 分帧） | 一条完整协议消息，以及从连续 TCP 字节中识别它边界的过程 |
+| UTF-8 bytes（UTF-8 字节） | 消息在线路上的实际编码大小，不等同于 Java 字符串长度 |
+| codec（编解码器） | 在类型化消息对象与 JSON 字节之间转换并校验字段的组件 |
+| schema（结构契约） | 一类消息允许出现的字段、类型和嵌套结构 |
+| inbound / outbound（入站 / 出站） | 分别表示网络到 Java、以及 Java 到网络的消息方向 |
+| timeout（超时） | 等待超过限定时间后返回控制权，不一定表示连接已断开 |
+| backoff（退避） | 连接失败后逐步延长再次尝试的等待时间 |
+| jitter（随机抖动） | 在退避时间上增加随机偏移，避免大量连接同时重试 |
+| EOF（流结束） | 对端已经关闭连接，读取端不会再收到字节 |
+| flush（刷新） | 立即把缓冲区中的字节交给底层连接发送 |
+| batch（批次） | 一轮循环中连续处理的有限数量消息 |
+| rebuild（重建） | 关闭当前 Socket，并按退避规则建立新连接 |
+| terminal close（永久关闭） | 停止 worker、关闭 Socket，且之后不再连接 |
+| bounded join（有界等待线程结束） | 最多等待指定时间，避免关闭流程无限卡住 |
+| fatal / recoverable（致命 / 可恢复） | 前者必须重建连接；后者只拒绝当前消息并可保持连接 |
+| lifecycle（生命周期） | transport 从启动、连接、重连到永久关闭的一组状态变化 |
+| daemon thread（守护线程） | 不阻止进程退出的后台线程；它仍应在关闭流程中主动结束 |
+| busy-spin（空转） | 线程不等待地反复检查条件，会无意义占用 CPU |
+| spurious wakeup（无原因唤醒） | 等待线程在条件未满足时也可能醒来，因此醒来后必须重新检查条件 |
 
 | 能力 | 状态 | 当前行为 |
 |------|------|----------|
@@ -30,9 +62,8 @@ localhost TCP，但不理解 Enemy 应该采取什么策略，也不允许网络
 | 指数退避 | **已实现** | 默认 `250 → 500 → 1000 → 2000 → 4000 ms` |
 | 新连接 epoch | **已实现** | connect 成功后由 Session 递增 `sessionEpoch` 并重置 message sequence |
 | terminal close | **已实现** | 关闭 Socket 解除 read/connect，唤醒 backoff，并有界 join worker |
-| localhost 双向测试 | **已实现** | 真实 Socket 上完成 Java 写出与读回解码 |
-| Python server | **未实现** | 当前没有正式跨进程 Agent 往返 |
-| Game/Enemy 接线 | **未实现** | 正式游戏当前不会创建启用的远程 Session |
+| Python server | **端到端接通** | 支持多连接、严格 codec、确定性 brain 和五种故障模式 |
+| Game/Enemy 接线 | **已实现** | 启用配置时每个 Enemy 创建独立 Session；普通 `Main` 仍默认关闭 |
 
 最重要的边界：
 
@@ -50,8 +81,8 @@ AgentHandler
 相关文档：
 
 - [`session.md`](session.md)：Session 身份、请求、deadline、队列和状态机。
+- [`agentarchitecture.md`](agentarchitecture.md)：外部 Agent runtime、Python brain 和跨语言边界。
 - [`AI_TICK_ARCHITECTURE.md`](AI_TICK_ARCHITECTURE.md)：Game Loop、AI Tick 和控制层。
-- [`PHASE_2_SPEC.md`](PHASE_2_SPEC.md)：Phase 2 的锁定契约与验收矩阵。
 
 ---
 
@@ -98,7 +129,7 @@ ActionQueue 应该装入什么动作？
 
 - 网络延迟会阻塞游戏线程；
 - reconnect、deadline 和动作决策会耦合成一个大状态机；
-- 单元测试必须打开真实端口；
+- 网络细节会渗入 Enemy 和 Game 的业务逻辑；
 - IO thread 可能越过 Validator 直接修改 Enemy；
 - close、换层和死亡时更容易遗留旧线程。
 
@@ -116,7 +147,7 @@ AgentProtocolCodec = Envelope ↔ JSON
 
 ```mermaid
 flowchart LR
-    GAME["Game thread<br/>未来生产接线"] --> SESSION["AgentSession<br/>identity / request / queues"]
+    GAME["Game thread<br/>生产 poll / collect / close"] --> SESSION["AgentSession<br/>identity / request / queues"]
 
     SESSION --> OUT["bounded outbound queue"]
     IN["bounded inbound queue"] --> SESSION
@@ -132,10 +163,10 @@ flowchart LR
     CODEC --> OFFER["TransportEndpoint.offerInbound()"]
     OFFER --> IN
 
-    SOCKET -.-> PY["Python Agent runtime<br/>尚未实现"]
+    SOCKET --> PY["Python Agent runtime<br/>确定性 runtime 已接通"]
 ```
 
-实线已经实现。虚线表示后续 Python runtime。
+Java transport、Python runtime 和 Game/Enemy 已形成可选的生产闭环；是否启动 worker 仍由配置决定。
 
 当前默认构造关系：
 
@@ -146,7 +177,8 @@ new AgentSession(config, identity, clock)
   → config.enabled == false 时不启动 worker
 ```
 
-显式依赖注入构造器仍然保留，因此 Session 状态机测试继续使用内存 transport。
+显式依赖构造器仍然保留，调用方也可以提供其他 `AgentTransport` 实现；
+`SocketTransport` 只是当前正式网络实现。
 
 ---
 
@@ -202,8 +234,8 @@ decode
 
 ### 3.3 正常双向往返时序
 
-下面同时标出线程边界和消息方向。remote endpoint 当前由 localhost 测试实现，后续替换为
-Python runtime 时不改变 Java 侧顺序。
+下面同时标出线程边界和消息方向。remote endpoint（远端端点）当前是独立 Python
+进程，Java 侧始终保持相同顺序。
 
 ```mermaid
 sequenceDiagram
@@ -430,7 +462,8 @@ sequenceDiagram
 ### 5.3 为什么当前没有 jitter
 
 当前目标是 localhost 且 Enemy 数量有限，规范锁定的是确定性的指数序列，所以没有加入随机 jitter。
-若未来大量 Session 同时重连导致 herd effect，应在新的规模验证后再决定，不能悄悄改变现有测试契约。
+若未来大量 Session 同时重连产生 herd effect（羊群效应，即许多连接在同一时刻集中重试），
+应根据实际连接规模再决定是否加入 jitter，不能悄悄改变现有时序语义。
 
 ### 5.4 可唤醒等待
 
@@ -440,8 +473,6 @@ sequenceDiagram
 - 对 spurious wakeup 重新计算剩余单调时间；
 - terminal close 调用 `wake()`；
 - close 后不会重新 connect。
-
-测试注入 fake waiter，可以直接记录 `250/500/...`，不使用 `Thread.sleep()`。
 
 ---
 
@@ -557,7 +588,7 @@ frame limit 不包含最后的 NDJSON `\n` delimiter。
 当前是 localhost、低吞吐控制消息。每条 frame flush：
 
 - 让 observation/cancel 不滞留在用户态缓冲；
-- 时序更容易测试和诊断；
+- 缩短小消息延迟，也更容易按日志诊断消息顺序；
 - 避免等待另一条消息才真正发送。
 
 若未来性能数据证明需要 batching，应保持 frame 边界和有界延迟后再调整。
@@ -935,94 +966,11 @@ Session 的 soft/hard deadline 与 cancel grace 不在 transport 内计算。
 
 ---
 
-## 14. 测试 seam
+## 14. 外部 runtime 与生产接线
 
-### 14.1 为什么不只测真实 Socket
+### 14.1 Python deterministic runtime
 
-真实 localhost 测试可以证明：
-
-- Java 标准 Socket 能连接；
-- NDJSON 能真实写出；
-- inbound bytes 能真实读回；
-- persistent connection 双向工作。
-
-但它不适合精确控制：
-
-- 前两次 connect 失败、第三次成功；
-- backoff 记录必须正好是 250/500；
-- worker 正好阻塞在 read；
-- 第 65,537 个 byte 立即失败；
-- 半帧中间正好发生 timeout。
-
-因此 transport 保留最小注入 seam。
-
-### 14.2 可注入接口
-
-`SocketTransport` 内部 package seam：
-
-```text
-ConnectionFactory
-  → create TransportConnection
-
-TransportConnection
-  → connect / setReadTimeout / input / output / close
-
-BackoffWaiter
-  → await(delayMs) / wake()
-```
-
-生产实现：
-
-```text
-JavaSocketConnection
-MonitorBackoffWaiter
-```
-
-测试实现：
-
-- recording connection；
-- scheduled connect failure；
-- polling input；
-- blocking input；
-- immediate/holding waiter；
-- counting byte input。
-
-### 14.3 当前自动测试
-
-[`SocketTransportTest`](byog/Bridge/SocketTransportTest.java) 共 9 个测试：
-
-| 测试 | 主要证明 |
-|------|----------|
-| localhost 双向 NDJSON | 真实 Socket 写 heartbeat，并读回 protocol diagnostic |
-| worker thread ownership | connect/read/write 来自同一 worker，不是测试/game thread |
-| reconnect/backoff/epoch | 250/500，成功重置，重建后 epoch++ |
-| close unblocks reader | 阻塞 read 被 close 唤醒，worker 在上限内结束 |
-| oversize inbound | 第一个超限 byte 立即失败 |
-| partial frame timeout | timeout 前 bytes 在下一轮继续使用 |
-| malformed UTF-8 | strict decoder 拒绝坏 byte sequence |
-| oversize outbound | 检查发生在任何 write 前 |
-| unknown message type | Handler 收到 typed rejection，连接保持 CONNECTED |
-
-当前联合验证：
-
-```text
-Phase2TestSuite + SocketTransportTest
-OK (98 tests)
-```
-
-Transport 测试曾连续重复 5 次，均为：
-
-```text
-OK (9 tests)
-```
-
----
-
-## 15. 当前尚未接线的部分
-
-### 15.1 Python deterministic runtime
-
-后续 server 需要：
+Python server 已实现：
 
 - 监听 `127.0.0.1:9876`；
 - 每条 TCP connection 保持独立 Agent context；
@@ -1033,9 +981,11 @@ OK (9 tests)
 
 Transport 不负责启动 Python 进程。
 
-### 15.2 Game/Enemy 生产接线
+完整说明见 [`agentarchitecture.md`](agentarchitecture.md)。
 
-后续 Java 路径需要：
+### 14.2 Game/Enemy 生产接线
+
+当前 Java 路径已经：
 
 - 每个 Enemy 创建自己的启用 Session；
 - `pollAgentMessages()` 在 game-thread 安全边界 drain inbound；
@@ -1044,55 +994,57 @@ Transport 不负责启动 Python 进程。
 - bridge disabled 时不创建 worker；
 - runtime 不可达时继续本地 fallback。
 
-这些完成前，当前结果只能称为“真实 Java TCP transport”，不能称为完整 Java ↔ Python ↔ Action 闭环。
+正式运行路径支持 observation → intent → action → feedback、双连接隔离、延迟、
+no-read 背压、断线恢复和 terminal close。普通 `Main` 仍默认关闭 Bridge，Transport 也不会
+自动启动或结束用户持有的 Python 进程。
 
 ---
 
-## 16. 常见错误实现
+## 15. 常见错误实现
 
-### 16.1 在 Game thread 直接 new Socket
+### 15.1 在 Game thread 直接 new Socket
 
 后果：连接失败或 read 卡住时游戏停止推进。
 
 正确边界：Game thread 只调用 Session 的非阻塞 queue API。
 
-### 16.2 使用 `BufferedReader.readLine()` 后才检查大小
+### 15.2 使用 `BufferedReader.readLine()` 后才检查大小
 
 后果：对方可以发送没有换行的巨大输入，先迫使 JVM 分配巨大 String。
 
 正确边界：先用 `BoundedFrameReader` 按 byte 累积和拒绝，再 decode UTF-8。
 
-### 16.3 按 `String.length()` 限制 frame
+### 15.3 按 `String.length()` 限制 frame
 
 后果：多字节 UTF-8 内容绕过 wire limit。
 
 正确边界：写侧检查 UTF-8 `bytes.length`。
 
-### 16.4 一个线程永久 read
+### 15.4 一个线程永久 read
 
 后果：outbound observation/cancel 永远无法写出。
 
 正确边界：短读 timeout + bounded write batch。
 
-### 16.5 IO worker 直接调用 Enemy
+### 15.5 IO worker 直接调用 Enemy
 
 后果：跨线程世界修改、跳过 Validator、不可重复竞态。
 
 正确边界：worker 只 offer inbound，Handler 只由 game-thread poll 调用。
 
-### 16.6 只设置 closed flag
+### 15.6 只设置 closed flag
 
 后果：worker 仍阻塞在 Socket read 或 backoff wait。
 
 正确边界：close active Socket + wake waiter + bounded join。
 
-### 16.7 每毫秒 reconnect
+### 15.7 每毫秒 reconnect
 
 后果：无 server 时占 CPU、刷日志、多个 Enemy 同时打满连接尝试。
 
 正确边界：配置化、封顶的指数退避。
 
-### 16.8 把所有未知输入都宽松解析
+### 15.8 把所有未知输入都宽松解析
 
 后果：未来字段可能被错误理解为可执行 intent。
 
@@ -1100,7 +1052,7 @@ Transport 不负责启动 Python 进程。
 
 ---
 
-## 17. 长期不变量
+## 16. 长期不变量
 
 1. 一个启动的 transport 只有一个 IO worker。
 2. 普通 connect/read/write/flush 只能由 worker 调用。
@@ -1121,9 +1073,9 @@ Transport 不负责启动 Python 进程。
 
 ---
 
-## 18. 故障定位
+## 17. 故障定位
 
-### 18.1 连不上 server
+### 17.1 连不上 server
 
 检查顺序：
 
@@ -1137,7 +1089,7 @@ config.enabled 是否为 true
   → backoff 是否按 250/500/... 推进
 ```
 
-### 18.2 已连接但 Python 收不到 observation
+### 17.2 已连接但 Python 收不到 observation
 
 ```text
 Session 是否 CONNECTED
@@ -1149,7 +1101,7 @@ Session 是否 CONNECTED
   → Python 是否持续 read
 ```
 
-### 18.3 Java 收到 bytes 但没有 intent
+### 17.3 Java 收到 bytes 但没有 intent
 
 ```text
 是否读到 '\n'
@@ -1163,7 +1115,7 @@ Session 是否 CONNECTED
   → Validator 是否接受 intent
 ```
 
-### 18.4 close 后还有 worker
+### 17.4 close 后还有 worker
 
 ```text
 AgentSession.close 是否执行
@@ -1177,7 +1129,7 @@ AgentSession.close 是否执行
 
 ---
 
-## 19. 最短阅读顺序
+## 18. 最短阅读顺序
 
 想理解当前 transport，只需按以下顺序：
 
@@ -1191,7 +1143,6 @@ AgentSession.close 是否执行
 8. [`AgentSession.openConnection/loseConnection/protocolFatal`](byog/Bridge/AgentSession.java)
 9. [`AgentSessionConfig`](byog/Bridge/AgentSessionConfig.java)
 10. [`AgentProtocolCodec`](byog/Bridge/AgentProtocolCodec.java)
-11. [`SocketTransportTest`](byog/Bridge/SocketTransportTest.java)
 
 读完第 4 项可以理解双向公平性；读完第 6 项可以理解 frame 和 failure 边界；
-读完最后一项可以看到真实 Socket 与确定性 failure injection 怎样互补。
+读完第 10 项可以理解类型化消息如何变成网络字节。

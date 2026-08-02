@@ -18,7 +18,7 @@ Java 提交后的世界
 
 等待 Python、Python 断线或 Python 返回坏消息时，Enemy 仍要继续行动。Java 始终拥有世界状态、碰撞、能力、动作执行和最终裁决权。
 
-这份指南回答“按什么顺序改、每一步在哪里停下来验证”。精确协议、状态转换和测试断言以 [PHASE_2_SPEC.md](PHASE_2_SPEC.md) 为准；系统动机和长期架构见 [AI_TICK_ARCHITECTURE.md](AI_TICK_ARCHITECTURE.md)。
+这份指南回答“按什么顺序改、每一步在哪里停下来验证”。精确协议、状态转换和测试断言以 [PHASE_2_SPEC.md](PHASE_2_SPEC.md) 为准；系统动机和长期架构见 [AI_TICK_ARCHITECTURE.md](../AI_TICK_ARCHITECTURE.md)。
 
 阅读时不需要先掌握网络和并发。先读“从 Phase 1 到 Phase 2”，建立整体图景；施工时再从 2.1 开始顺序执行。每一节都会尽量回答四个问题：
 
@@ -36,7 +36,7 @@ Java 提交后的世界
 
 | 文档 | 解决的问题 |
 |------|------------|
-| [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md) | 为什么做 Phase 2，以及它与后续阶段的关系 |
+| [DEVELOPMENT_ROADMAP.md](../DEVELOPMENT_ROADMAP.md) | 为什么做 Phase 2，以及它与后续阶段的关系 |
 | [PHASE_2_SPEC.md](PHASE_2_SPEC.md) | 必须满足的契约、状态表、跨进程字段规则和验收矩阵 |
 | 本文 | 实现顺序、代码落点、阶段闸门和排错路径 |
 | `PHASE_2_COMPLETION.md` | 完成后的命令、测试结果、故障演练和偏差证据 |
@@ -2129,14 +2129,17 @@ commit 后是否生成 feedback？
 
 通过 P2-I01～P2-I05，并同时复核 P2-A03、P2-A10～P2-A12：
 
-- [ ] 单 Enemy 完成 observation → intent → action → feedback，所有关联 ID 一致。
-- [ ] 双 Enemy 使用两条持久连接，identity、queue、request 和决策不串线。
-- [ ] delay 时 logical tick 和旧计划 cadence 继续推进。
-- [ ] no-read 导致 outbound 饱和时，游戏线程仍能持续 tick。
-- [ ] disconnect 后由本地 Brain 接管。
-- [ ] Python restart 后，新 intent 只在 poll 安全边界恢复远程控制。
-- [ ] feedback 使用 commit 后位置，并保留 decisionId/actionIndex/source/overrideReason。
-- [ ] Enemy 死亡、换层和退出后，旧 Session 不会重连或回调。
+- [x] 单 Enemy 完成 observation → intent → action → feedback，所有关联 ID 一致。
+- [x] 双 Enemy 使用两条持久连接，identity、queue、request 和决策不串线。
+- [x] delay 时 logical tick 和旧计划 cadence 继续推进。
+- [x] no-read 导致 outbound 饱和时，游戏线程仍能持续 tick。
+- [x] disconnect 后由本地 Brain 接管。
+- [x] Python restart 后，新 intent 只在 poll 安全边界恢复远程控制。
+- [x] feedback 使用 commit 后位置，并保留 decisionId/actionIndex/source/overrideReason。
+- [x] Enemy 死亡、换层和退出后，旧 Session 不会重连或回调。
+
+2026-08-02 验证：快速 gate `OK (90 tests)`，Socket transport `OK (9 tests)`，
+真实 Java/Python 集成 `OK (6 tests)`；集成入口额外连续重复 3 次均通过。
 
 ---
 
@@ -2170,7 +2173,7 @@ enemy moved
 Phase 2 新增：
 
 ```text
-AgentTrace.PHASE2_SCHEMA_VERSION = "phase2.trace.v1"
+AgentTrace.AGENT_SCHEMA_VERSION = "agent.trace.v1"
 ```
 
 至少覆盖：
@@ -2322,9 +2325,9 @@ advance to 2500ms → 进入 SOFT_TIMED_OUT
 | 测试类 | 使用真实 Socket/Python | 负责证明什么 |
 |--------|-----------------------|--------------|
 | `Phase2ProtocolTest` | 否 | codec、schema、坏输入、知识边界 |
-| `Phase2SessionTest` | 否，使用 fake clock/transport | 状态机、单 in-flight、deadline、背压、close |
+| `AgentSessionTest` | 否，使用 fake clock/transport | 状态机、单 in-flight、deadline、背压、close |
 | `Phase2AiTickTest` | 否 | P0～P4、单动作、safe boundary、commit/feedback 时序 |
-| `Phase2IntegrationTest` | 是 | 真实 Java ↔ Python TCP 和五种 runtime 行为 |
+| `AgentRuntimeIntegrationTest` | 是 | 真实 Java ↔ Python TCP、五种 runtime 行为和 terminal close |
 | `Phase2TestSuite` | 组合入口 | Phase 0/1 回归与全部 Phase 2 gate |
 
 这叫 **test pyramid（测试金字塔）**：
@@ -2341,7 +2344,7 @@ advance to 2500ms → 进入 SOFT_TIMED_OUT
 
 ### 2.8.8 Integration test 怎样管理 Python 子进程
 
-`Phase2IntegrationTest` 可以用 Java `ProcessBuilder` 启动：
+`AgentRuntimeIntegrationTest` 使用 Java `ProcessBuilder` 启动：
 
 ```powershell
 python agent/python/run.py --host 127.0.0.1 --port <test-port> --mode normal
@@ -2392,15 +2395,20 @@ P2-I01 ～ P2-I05 涉及 Python 子进程、端口和有界等待，保留独立
 
 通过 P2-T01/P2-T02 和 P2-R01/P2-R02，并检查：
 
-- [ ] 相同 harness 场景运行两次，canonical trace 字节一致。
-- [ ] trace 能从 observation 关联到 request、intent、override、action 和 feedback。
-- [ ] wall-clock、thread name、socket address 等不稳定字段不进入 canonical evidence。
-- [ ] Phase 0/1 schema 语义隔离，碰撞、私有感知和确定性契约仍通过。
-- [ ] 历史 gameplay baseline 不参与 gate，也没有普通测试覆盖入口。
-- [ ] deadline 单元测试使用 fake clock，不使用 `Thread.sleep()`。
-- [ ] integration 每一步都有有界等待，失败信息能指出卡在哪个状态。
-- [ ] 测试结束后没有 Python 子进程、Session thread 或端口残留。
-- [ ] `Phase2TestSuite` 可用一条命令 headless 运行，且没有 suite 嵌套或重复计数。
+- [x] 相同 harness 场景运行两次，canonical trace 字节一致。
+- [x] trace 能从 observation 关联到 request、intent、override、action 和 feedback。
+- [x] wall-clock、thread name、socket address 等不稳定字段不进入 canonical evidence。
+- [x] Phase 0/1 schema 语义隔离，碰撞、私有感知和确定性契约仍通过。
+- [x] 历史 gameplay baseline 不参与 gate，也没有普通测试覆盖入口。
+- [x] deadline 单元测试使用 fake clock，不使用 `Thread.sleep()`。
+- [x] integration 每一步都有有界等待，失败信息能指出卡在哪个状态。
+- [x] 测试结束后没有 Python 子进程、Session thread 或端口残留。
+- [x] `Phase2TestSuite` 可用一条命令 headless 运行，且没有 suite 嵌套或重复计数。
+
+2026-08-02 的 2.8 验证：统一 deterministic gate `OK (96 tests)`，Socket transport
+`OK (9 tests)`，真实 Java/Python integration `OK (6 tests)`。新增
+`AgentTraceContractTest` 覆盖 canonical 字节确定性、完整关联链、迟到响应、
+fake clock deadline、旧 schema 隔离与 reflex override 生命周期。
 
 ---
 
@@ -2430,6 +2438,7 @@ agent.bridge.cancelGraceMs=500
 agent.bridge.outboundCapacity=32
 agent.bridge.inboundCapacity=16
 agent.bridge.pendingEventCapacity=16
+agent.bridge.maxInboundPerPoll=8
 agent.bridge.maxFrameBytes=65536
 agent.bridge.reconnectInitialMs=250
 agent.bridge.reconnectMaxMs=4000
@@ -2607,13 +2616,18 @@ Completion 文档回答的是：“别人如何复查 Phase 2 确实达到 Spec�
 
 ### 2.9 阶段闸门
 
-- [ ] 所有配置有安全默认值和范围校验。
-- [ ] `bridge=false` 时不创建网络线程，Game 仍使用新 loop 并正常运行。
-- [ ] 五种 fake runtime 模式都有命令、日志、trace 和观察结论。
-- [ ] 故障演练中没有用无限等待或强行阻塞游戏线程来“保证顺序”。
-- [ ] 单一 `Phase2TestSuite` 中的 Phase 0/1/2 deterministic contracts 全部且仅执行一次。
-- [ ] `PHASE_2_COMPLETION.md` 中的证据能对应到明确 commit。
-- [ ] Spec 偏差、已知风险和 Phase 3 可依赖/不得假设项已写清。
+- [x] 所有配置有安全默认值和范围校验。
+- [x] `bridge=false` 时不创建网络线程，Game 仍使用新 loop 并正常运行。
+- [x] 五种 fake runtime 模式都有命令、日志、trace 和观察结论。
+- [x] 故障演练中没有用无限等待或强行阻塞游戏线程来“保证顺序”。
+- [x] 单一 `Phase2TestSuite` 中的 Phase 0/1/2 deterministic contracts 全部且仅执行一次。
+- [ ] `PHASE_2_COMPLETION.md` 中的证据能对应到明确 commit；当前对应未提交工作树，提交后回填。
+- [x] Spec 偏差、已知风险和 Phase 3 可依赖/不得假设项已写清。
+
+2026-08-02 的 2.9 验证：Java 编译通过，统一 deterministic gate `OK (100 tests)`，
+Socket transport `OK (9 tests)`，真实 Java/Python integration `OK (7 tests)`，Python
+unittest discovery `OK (23 tests)`。`PHASE_2_COMPLETION.md` 已记录命令、五种模式、
+canonical trace、偏差、风险与交接；正式关闭只待创建最终 commit 并回填引用。
 
 ---
 
@@ -2630,7 +2644,7 @@ Completion 文档回答的是：“别人如何复查 Phase 2 确实达到 Spec�
 | 生产集成 | `byog/Entity/Enemy.java`、`byog/Core/Game.java` |
 | 可观测性与配置 | `byog/Trace/AgentTrace.java`、`byog/IO/GameConfig.java`、`config/game.properties` |
 | Python fake runtime | `agent/python/dungeonmind_agent/protocol.py`、`brain/deterministic.py`、`server.py`、`agent/python/run.py`、`smoke_test.py` |
-| 测试 | `byog/Test/EncounterHarness.java`、`byog/AI/AiTickLoop.java`、`Phase2ProtocolTest.java`、`Phase2SessionTest.java`、`Phase2AiTickTest.java`、`Phase2IntegrationTest.java`、`Phase2TestSuite.java` |
+| 测试 | `byog/Test/EncounterHarness.java`、`byog/AI/AiTickLoop.java`、`Phase2ProtocolTest.java`、`AgentSessionTest.java`、`Phase2AiTickTest.java`、`AgentRuntimeIntegrationTest.java`、`Phase2TestSuite.java` |
 
 明确不要创建旧方案中的：
 
@@ -2672,13 +2686,13 @@ java "-Dfile.encoding=UTF-8" -cp "out;..\library-sp18\javalib\*" `
     org.junit.runner.JUnitCore byog.Test.Phase2ProtocolTest
 
 java "-Dfile.encoding=UTF-8" -cp "out;..\library-sp18\javalib\*" `
-    org.junit.runner.JUnitCore byog.Test.Phase2SessionTest
+    org.junit.runner.JUnitCore byog.Test.AgentSessionTest
 
 java "-Dfile.encoding=UTF-8" -cp "out;..\library-sp18\javalib\*" `
     org.junit.runner.JUnitCore byog.Test.Phase2AiTickTest
 
 java "-Dfile.encoding=UTF-8" -cp "out;..\library-sp18\javalib\*" `
-    org.junit.runner.JUnitCore byog.Test.Phase2IntegrationTest
+    org.junit.runner.JUnitCore byog.Test.AgentRuntimeIntegrationTest
 ```
 
 实现过程中优先跑最小相关测试，再跑聚合 Suite。网络集成测试可以有有界等待；deterministic tests 不得用 sleep 推进 deadline。
@@ -2720,39 +2734,39 @@ java "-Dfile.encoding=UTF-8" -cp "out;..\library-sp18\javalib\*" `
 
 ### 协议与知识边界
 
-- [ ] Java/Python 对 `phase2.session.v1` 的字段和限制一致。
-- [ ] 坏 JSON、重复 key、非法数值、尾随垃圾、过深/过大帧均被拒绝。
-- [ ] wire observation 不含墙后 tile、实体或可推断隐藏地图的信息。
-- [ ] 未知 skill/parameter 不产生 lease 或 action。
+- [x] Java/Python 对 `phase2.session.v1` 的字段和限制一致。
+- [x] 坏 JSON、重复 key、非法数值、尾随垃圾、过深/过大帧均被拒绝。
+- [x] wire observation 不含墙后 tile、实体或可推断隐藏地图的信息。
+- [x] 未知 skill/parameter 不产生 lease 或 action。
 
 ### Session 与非阻塞
 
-- [ ] 游戏线程从不执行阻塞 IO。
-- [ ] 每个 Enemy 最多一个有效 in-flight；新 observation 会合并。
-- [ ] soft timeout 保留请求和旧计划；hard timeout 使旧 generation 失效。
-- [ ] queue 满时低优先级可丢、observation 可合并、关键消息不静默丢失。
-- [ ] disconnect/reconnect、cancel grace 和 close 都有确定状态转换。
-- [ ] 两个 Enemy 的 identity、queue、generation 和 response 完全隔离。
+- [x] 游戏线程从不执行阻塞 IO。
+- [x] 每个 Enemy 最多一个有效 in-flight；新 observation 会合并。
+- [x] soft timeout 保留请求和旧计划；hard timeout 使旧 generation 失效。
+- [x] queue 满时低优先级可丢、observation 可合并、关键消息不静默丢失。
+- [x] disconnect/reconnect、cancel grace 和 close 都有确定状态转换。
+- [x] 两个 Enemy 的 identity、queue、generation 和 response 完全隔离。
 
 ### 双速行为
 
-- [ ] 每个 action tick 至多执行一个 Action。
-- [ ] Python 慢或断线时 Enemy 继续旧计划或本地 fallback。
-- [ ] 玩家进入 FOV/相邻时，P2/P1 在下一个 action tick 生效。
-- [ ] GUARD 可以限制主动追击，但不能禁用 P0/P1。
-- [ ] reflex override 显式开始/结束，旧 lease 只在仍有效时恢复。
-- [ ] 新远程 lease 只在 poll 安全边界接管。
+- [x] 每个 action tick 至多执行一个 Action。
+- [x] Python 慢或断线时 Enemy 继续旧计划或本地 fallback。
+- [x] 玩家进入 FOV/相邻时，P2/P1 在下一个 action tick 生效。
+- [x] GUARD 可以限制主动追击，但不能禁用 P0/P1。
+- [x] reflex override 显式开始/结束，旧 lease 只在仍有效时恢复。
+- [x] 新远程 lease 只在 poll 安全边界接管。
 
 ### 回归、证据和范围
 
-- [ ] `Phase2TestSuite` headless 全绿。
-- [ ] Phase 0/1 碰撞、私有感知、确定性和旧 trace schema 语义契约通过。
-- [ ] 历史 Phase 0/1 baseline 仅作审计证据，不阻塞合理的 gameplay 重构。
-- [ ] normal/delay/malformed/disconnect/no-read 五种模式均有证据。
-- [ ] canonical trace 可关联 observation、request、intent、override、action、feedback。
-- [ ] `agent.bridge.enabled=false` 是默认值，且不创建网络线程。
-- [ ] 未引入 LLM、Tool Calling、共享上下文、复杂 skill 或多 Agent 协作。
-- [ ] 未围绕 `playWithInputString()` 新建 runtime 路径。
-- [ ] `PHASE_2_COMPLETION.md` 已记录测试、偏差和 Phase 3 交接。
+- [x] `Phase2TestSuite` headless 全绿。
+- [x] Phase 0/1 碰撞、私有感知、确定性和旧 trace schema 语义契约通过。
+- [x] 历史 Phase 0/1 baseline 仅作审计证据，不阻塞合理的 gameplay 重构。
+- [x] normal/delay/malformed/disconnect/no-read 五种模式均有证据。
+- [x] canonical trace 可关联 observation、request、intent、override、action、feedback。
+- [x] `agent.bridge.enabled=false` 是默认值，且不创建网络线程。
+- [x] 未引入 LLM、Tool Calling、共享上下文、复杂 skill 或多 Agent 协作。
+- [x] 未围绕 `playWithInputString()` 新建 runtime 路径。
+- [x] `PHASE_2_COMPLETION.md` 已记录测试、偏差和 Phase 3 交接。
 
 通过这些检查后，Phase 2 才算完成；“Python 能回一条 CHASE”只是链路冒烟，不是阶段验收。

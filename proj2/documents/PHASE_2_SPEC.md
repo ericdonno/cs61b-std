@@ -949,9 +949,9 @@ agent.actionQueue.highWater=5
 | `agent/python/dungeonmind_agent/brain/deterministic.py` | 新建 | 每连接 deterministic brain | LangGraph/状态记忆 |
 | `agent/python/dungeonmind_agent/server.py`、`agent/python/run.py` | 新建 | 多连接 server 与 CLI host/port/mode/delay 入口 | 自动被 Main 启动 |
 | `byog/Test/Phase2ProtocolTest.java` | 新建 | codec、有限知识、坏消息 | 网络 sleep |
-| `byog/Test/Phase2SessionTest.java` | 新建 | fake clock/transport 下的状态、队列、deadline、close | GUI |
+| `byog/Test/AgentSessionTest.java` | 新建 | fake clock/transport 下的状态、队列、deadline、close | GUI |
 | `byog/Test/Phase2AiTickTest.java` | 新建 | 双速、P0–P4、cooldown、commit、feedback | 真实 LLM |
-| `byog/Test/Phase2IntegrationTest.java` | 新建 | Java ↔ Python smoke、断线/恢复 | 性能统计 |
+| `byog/Test/AgentRuntimeIntegrationTest.java` | 新建 | Java ↔ Python smoke、断线/恢复 | 性能统计 |
 | `byog/Test/EncounterHarness.java` | 新建 | 所有 two-guard 模式共用 ASCII parser、身份、时钟和 legacy/private 调度 | 镜像 harness |
 | `byog/Test/Phase2TestSuite.java` | 新建 | 唯一 deterministic Agent gate；直接列 leaf classes 且每项一次 | Suite 嵌套、integration |
 | `PHASE_2_COMPLETION.md` | 验收时新建 | 命令、结果、偏差、Phase 3 artifacts | 未验证的完成声明 |
@@ -1194,11 +1194,13 @@ java "-Dfile.encoding=UTF-8" -cp "out;..\library-sp18\javalib\*" `
 java "-Dfile.encoding=UTF-8" -cp "out;..\library-sp18\javalib\*" `
     org.junit.runner.JUnitCore byog.Test.Phase2ProtocolTest
 java "-Dfile.encoding=UTF-8" -cp "out;..\library-sp18\javalib\*" `
-    org.junit.runner.JUnitCore byog.Test.Phase2SessionTest
+    org.junit.runner.JUnitCore byog.Test.AgentSessionTest
+java "-Dfile.encoding=UTF-8" -cp "out;..\library-sp18\javalib\*" `
+    org.junit.runner.JUnitCore byog.Bridge.SocketTransportTest
 java "-Dfile.encoding=UTF-8" -cp "out;..\library-sp18\javalib\*" `
     org.junit.runner.JUnitCore byog.Test.Phase2AiTickTest
 java "-Dfile.encoding=UTF-8" -cp "out;..\library-sp18\javalib\*" `
-    org.junit.runner.JUnitCore byog.Test.Phase2IntegrationTest
+    org.junit.runner.JUnitCore byog.Test.AgentRuntimeIntegrationTest
 ```
 
 deterministic tests 禁止用 `Thread.sleep()` 推进 deadline。TCP integration 可使用有界等待，但失败信息必须
@@ -1210,7 +1212,7 @@ deterministic tests 禁止用 `Thread.sleep()` 推进 deadline。TCP integration
 
 ### 12.1 Phase 2 canonical 事件
 
-新增 `AgentTrace.PHASE2_SCHEMA_VERSION = "phase2.trace.v1"`，至少包含：
+新增稳定领域命名的 `AgentTrace.AGENT_SCHEMA_VERSION = "agent.trace.v1"`，至少包含：
 
 ```text
 AGENT_SESSION_STATE_CHANGED

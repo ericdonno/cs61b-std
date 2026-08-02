@@ -2,18 +2,50 @@
 
 > 状态：AgentSession 核心与 TCP transport 实现说明
 >
-> 更新时间：2026-07-31
+> 更新时间：2026-08-02
 >
 > 范围：`AgentSession` 的身份、请求生命周期、deadline、取消、有界邮箱、
-> `TransportEndpoint`、`AgentTransport`、TCP/NDJSON、关闭语义与测试
+> `TransportEndpoint`、`AgentTransport`、TCP/NDJSON 与关闭语义
 >
-> 不包含：Python Agent runtime、`Enemy`/`Game` 生产接线、Tool Calling 和多 Agent 协作
+> 不展开：Python Agent runtime、`Enemy`/`Game` 生产接线、Tool Calling 和多 Agent 协作
 
 ---
 
 ## 0. 先读这一页
 
-`AgentSession` 会话核心与 `SocketTransport` 已实现；正式游戏尚未创建 Session，Python runtime 也尚未实现。
+`AgentSession`、`SocketTransport`、Python deterministic runtime 和 Game/Enemy 接线均已实现。
+启用 `AgentSessionConfig` 时，每个存活 Enemy 拥有独立 Session；普通 `Main` 仍使用默认关闭配置。
+
+### 0.1 文中术语
+
+| 术语 | 在本文中的意思 |
+|------|----------------|
+| Session（会话） | 一个 Enemy 与外部 Agent 之间的身份、请求和消息生命周期边界 |
+| transport（传输层） | 负责连接、收发字节和重连的组件；它不做游戏决策 |
+| endpoint（端点） | Session 暴露给传输层的受限接口，用于取出待发消息和交回已收消息 |
+| envelope（消息信封） | 包住消息类型、身份、序号和 payload 的协议外层对象 |
+| inbound / outbound（入站 / 出站） | 分别表示外部 Agent 发往 Java、以及 Java 发往外部 Agent 的消息方向 |
+| queue / mailbox（队列 / 邮箱） | 按顺序暂存消息的有限容量容器；本文两词指同一类结构 |
+| single in-flight（单个进行中请求） | 同一 Session 同时最多允许一项尚未完成或取消确认的远程请求 |
+| epoch（连接代次） | 每次物理连接成功时递增，用于拒绝上一条连接留下的消息 |
+| generation（请求代次） | 请求失效时递增，用于保证旧计算结果永远不能重新生效 |
+| deadline（截止时间） | 请求进入“过慢”或“必须取消”状态的时间界线 |
+| cancel grace（取消宽限期） | 发出取消后，等待对方确认的有限时间 |
+| Handler（处理器） | 游戏线程取到入站消息后调用的业务入口 |
+| monotonic clock（单调时钟） | 只向前推进的计时来源，不受系统时间被手工修改或校时回拨影响 |
+| wall-clock（现实时间） | 操作系统显示的日期和时间，可能因校时而跳变，不用于 deadline |
+| backpressure（背压） | 消费跟不上时，通过合并、丢弃低优先级消息或拒绝关键消息阻止无限堆积 |
+| rebuild（重建连接） | 丢弃当前 Socket 并建立新连接，同时用新身份隔离旧消息 |
+| terminal close（永久关闭） | Session 进入不可恢复的终态；之后不能重连或接收新请求 |
+| idempotent（幂等） | 同一关闭操作调用多次，结果与调用一次相同 |
+| codec（编解码器） | 在类型化 Java/Python 对象与 NDJSON 字节之间转换并校验字段的组件 |
+| deterministic（确定性） | 相同输入产生相同决策，不依赖随机数或外部模型波动 |
+| `RequestContext`（请求上下文） | 一次已开始请求的不可变身份、观察序号和截止时间记录 |
+| identity / correlation（身份 / 关联） | 前者说明消息属于谁；后者说明响应对应哪一次请求和观察 |
+| stale / duplicate（过期 / 重复） | 已被新代次淘汰的消息，以及同一序号再次到达的消息 |
+| overflow（溢出） | 有界队列已满，无法再容纳当前消息 |
+| heartbeat（心跳） | 用于表示连接仍活跃的低优先级消息，不承载决策 |
+| `logicalTick`（逻辑时刻） | 游戏内因果序号；与计算网络等待的单调时间分开 |
 
 | 能力 | 状态 | 当前行为 |
 |------|------|----------|
@@ -27,17 +59,16 @@
 | 游戏线程 Handler 边界 | **已实现** | 只有 `pollInbound()` 调用 `AgentHandler` |
 | 幂等、永久 close | **已实现** | close 后请求、发送、入站和重连都不能重新激活 |
 | transport 生命周期控制 | **已实现** | 注入的 `AgentTransport` 接收 start、rebuild 和永久 close |
-| 内存 transport 测试 seam | **已实现** | 测试 transport 同时实现控制面并通过 endpoint 驱动数据面 |
 | TCP IO worker | **已实现** | 独立 worker 持有 Socket，执行 persistent NDJSON、退避重连和有界关闭 |
-| 生产 Game/Enemy 接线 | **未实现** | 正式 `pollAgentMessages()` / `collectAgentUpdates()` 尚未持有 Session |
-| Python runtime | **未实现** | 当前没有跨进程往返 |
+| 生产 Game/Enemy 接线 | **已实现** | poll 处理入站，collect 发送 observation/feedback，死亡、换层和退出执行 terminal close |
+| Python runtime | **端到端接通** | 支持 normal、delay、no-read、disconnect 和重启后的重新连接 |
 
 读图时使用以下约定：
 
-- **实线**：当前代码已经存在并由测试真实执行。
-- **虚线**：已锁定的接入位置或后续模块，当前没有生产调用。
-- **game-thread API**：只做内存状态转换和有界 enqueue/drain，不能阻塞。
-- **transport endpoint**：生产由唯一 IO worker 持有；确定性测试仍可由内存 fake transport 驱动。
+- **实线**：当前正式运行路径已经存在。
+- **虚线**：仍属于后续模型、工具或多 Agent 扩展。
+- **game-thread API（游戏线程接口）**：只做内存状态转换和有界入队/出队，不能阻塞。
+- **transport endpoint（传输端点）**：由唯一 IO worker 持有，是传输层访问 Session 的受限入口。
 - **transport control**：Session 调用 `AgentTransport` 发出非阻塞的重建或关闭命令。
 
 ---
@@ -102,7 +133,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph GAME["正式游戏层（接线尚未实现）"]
+    subgraph GAME["正式游戏层（已接线）"]
         POLL["Enemy.pollAgentMessages()"]
         COLLECT["Enemy.collectAgentUpdates()"]
         CLOSE["Enemy.closeAgentRuntime()"]
@@ -130,60 +161,40 @@ flowchart LR
         API --> CONTROL
     end
 
-    subgraph TEST["当前确定性外部环境（已实现）"]
-        FAKECLOCK["FakeClock"]
-        FAKETRANSPORT["InMemoryTransport"]
-        RECORD["RecordingHandler"]
-    end
-
     subgraph NETWORK["跨进程环境"]
         WORKER["SocketTransport<br/>已实现"]
         SOCKET["persistent NDJSON Socket<br/>已实现"]
-        PYTHON["Python Agent<br/>尚未实现"]
+        PYTHON["Python Agent<br/>确定性 runtime 已接通"]
     end
 
-    COLLECT -.-> API
-    POLL -.-> API
-    CLOSE -.-> API
-    HANDLER -.-> VALIDATOR
-
-    FAKECLOCK --> CLOCK
-    FAKETRANSPORT --> ENDPOINT
-    CONTROL --> FAKETRANSPORT
-    HANDLER --> RECORD
+    COLLECT --> API
+    POLL --> API
+    CLOSE --> API
+    HANDLER --> VALIDATOR
 
     ENDPOINT --> WORKER
     CONTROL --> WORKER
     WORKER --> SOCKET
-    SOCKET -.-> PYTHON
-    PYTHON -.-> SOCKET
+    SOCKET --> PYTHON
+    PYTHON --> SOCKET
 ```
 
-当前真正闭合的是：
+正式运行时只有一条消息路径。Session 把游戏线程与网络线程隔开，但不会建立第二套
+游戏规则：
 
 ```text
-ObservationEnvelope
-  → AgentSession.requestIntent()
-  → bounded outbound queue
-  → InMemoryTransport 取出
-  → 测试构造 submit_intent / cancel_ack
-  → TransportEndpoint.offerInbound()
-  → bounded inbound queue
-  → AgentSession.pollInbound()
-  → RecordingHandler
+世界提交后，Enemy 生成私有观察
+  → AgentSession 把观察放入有限容量的出站队列
+  → SocketTransport 网络线程通过 TCP 发给 Python Agent
+  → Python 返回战略 intent
+  → 下一次 Enemy poll 在游戏线程处理 intent
+  → Java 校验、仲裁并规划具体动作
+  → 执行动作并提交世界变化
+  → 把提交后的动作结果发回 Python
 ```
 
-当前尚未闭合的是：
-
-```text
-Enemy collect
-  ⇢ AgentSession
-  ⇢ TCP IO worker
-  ⇢ Python Agent
-  ⇢ submit_intent
-  ⇢ Enemy poll
-  ⇢ DecisionValidator / IntentArbiter
-```
+Session 管理消息是否仍属于当前请求；Java 的校验器、仲裁器、规划器和实体系统仍决定
+提案能否采用、具体执行什么动作以及世界如何变化。
 
 ---
 
@@ -243,8 +254,8 @@ transport owner 只把已解码消息放入 inbound queue
 
 因此 IO worker 即使收到合法 `submit_intent`，也不能直接移动 Enemy、修改 Lease 或调用 Planner。
 
-生产 `SocketTransport` 的 IO thread 驱动端点；`AgentSessionTest.InMemoryTransport` 继续以确定顺序
-手动驱动同一端点，用于覆盖精确状态转换。
+生产 `SocketTransport` 的 IO worker 驱动端点。它只能操作消息和连接状态，不能越过
+`pollInbound()` 直接调用游戏对象。
 
 ---
 
@@ -549,9 +560,8 @@ stateDiagram-v2
 - max frame bytes
 - shutdown join 上限
 
-Session 会同时设置 `rebuildRequested=true` 并调用注入 transport 的 `requestRebuild()`。
-内存 transport 继续用于确定性状态机测试；默认启用构造路径创建 `SocketTransport`。worker
-独占 connect/read/write，以短读超时交替推进双向队列；frame 在分配完整大字符串前按 UTF-8
+Session 会同时设置 `rebuildRequested=true` 并调用当前 transport 的 `requestRebuild()`。
+默认启用构造路径创建 `SocketTransport`。worker 独占 connect/read/write，以短读超时交替推进双向队列；frame 在分配完整大字符串前按 UTF-8
 bytes 限制，EOF/IO/fatal protocol failure 进入断线重连，terminal close 关闭 Socket 并有界 join。
 
 ---
@@ -705,7 +715,7 @@ pending events 使用单独的有界 `LinkedHashMap`：
 | Session closed | 所有未来操作保持终止结果 | 不重新连接或重新激活 queue |
 
 失败路径只管理会话状态。游戏中“旧 Lease 继续、本地 fallback 或 Reflex 接管”的行为属于
-`Enemy`/`IntentArbiter`，将在生产接线时保持独立。
+`Enemy`/`IntentArbiter`；生产接线保持了这一独立边界。
 
 ---
 
@@ -812,62 +822,9 @@ detail
 
 ---
 
-## 15. 当前测试覆盖
+## 15. 接入 AI Tick 的位置
 
-[`AgentSessionTest`](byog/Test/AgentSessionTest.java) 使用：
-
-- `FakeClock`：直接推进纳秒值，不等待现实时间。
-- `InMemoryTransport`：实现 `AgentTransport`，并通过 endpoint 取得 outbound、注入 inbound。
-- `RecordingHandler`：记录 intent、cancel ack、protocol rejection 和 intent 处理结果。
-- 真实 `PerceptionSystem`：生成私有 `ObservationEnvelope`。
-- deterministic `IdGenerator`：固定 decision/message ID。
-
-| 测试行为 | 主要证明 |
-|----------|----------|
-| disabled Session | 不启动 transport，关闭仍幂等 |
-| 未发送 observation 替换 | queue 内只保留最新快照，仍只有一个请求 |
-| 已发送请求期间的新 observation | 当前请求身份不变，最新快照等待下一请求 |
-| soft deadline | 不取消、不递增 generation |
-| hard deadline | generation 先失效，cancel 携带旧 generation |
-| matching cancel ack | ack 后才启动最新请求 |
-| 无新 observation 的 cancel ack | 不重复发送旧 observation |
-| Handler 拒绝 intent | sent events 保留到下一请求 |
-| cancel grace | 超时后请求重建，新连接进入新 epoch |
-| heartbeat eviction | 关键消息优先移除 heartbeat |
-| 满邮箱 observation 合并 | 不增加队列长度 |
-| critical outbound saturation | 显式拒绝并进入重建路径 |
-| cancel 的 critical saturation | generation 只递增一次并请求一次 transport 重建 |
-| inbound overflow | Handler 运行前即 protocol fatal |
-| 完整身份字段变异 | 任一关键字段错误都不能进入 intent handler |
-| world event 合并 | 合并键正确且 pending storage 有界 |
-| close 两次 | 幂等且永久 |
-| 两个 Enemy Session | 身份、队列、generation 和响应不串线 |
-
-[`SocketTransportTest`](byog/Bridge/SocketTransportTest.java) 另外覆盖：
-
-- 真实 localhost Socket 写出完整 NDJSON frame；
-- connect/read/write 只在同一 worker thread 上发生；
-- 250 → 500 ms 退避、成功后重置和重连 epoch；
-- terminal close 解除阻塞 read 并在 join 上限内结束；
-- bounded byte reader 在第一个超限 byte 立即失败，跨 timeout 保留半帧，并严格拒绝坏 UTF-8；
-- outbound 超限在写出前失败，未知兼容消息报告错误但不掉线。
-
-2026-07-31 的验证结果：
-
-```text
-快速 gate + 独立 Socket transport tests
-OK (98 tests)
-```
-
-状态机测试不访问真实端口；transport 测试只使用一个有界 localhost endpoint 和可注入连接，
-不启动 Python，也不使用 `Thread.sleep()`。
-
----
-
-## 16. 接入 AI Tick 的位置
-
-未来接线不能另建一套 Game Loop，只能填入现有
-`poll → execute → commit → collect` seam：
+正式游戏直接使用现有的 `poll → execute → commit → collect` 四段循环：
 
 ```mermaid
 sequenceDiagram
@@ -878,9 +835,9 @@ sequenceDiagram
     participant M as EntityManager
 
     G->>E: pollAgentMessages(context)
-    E-.->S: advanceRequestLifecycle(tick)
-    E-.->S: pollInbound(handler, tick)
-    S-.->V: handler 转交 submit_intent
+    E->>S: pollInbound(handler, tick)
+    S->>V: handler 转交 submit_intent
+    E->>S: advanceRequestLifecycle(tick)
 
     G->>E: executeOneAction(...)
     Note over E: Session 等待期间仍执行<br/>旧 Lease / Reflex / local fallback
@@ -888,9 +845,9 @@ sequenceDiagram
     G->>M: flushPendingChanges + removeDeadEntities
 
     G->>E: collectAgentUpdates(...)
-    E-.->S: sendActionFeedback(committed outcome)
-    E-.->S: sendWorldEvent(event)
-    E-.->S: requestIntent(latest committed observation)
+    E->>S: sendActionFeedback(committed outcome)
+    E->>S: sendWorldEvent(event)
+    E->>S: requestIntent(latest committed observation)
 ```
 
 必须保持：
@@ -903,9 +860,9 @@ sequenceDiagram
 
 ---
 
-## 17. 当前实现边界
+## 16. 当前实现边界
 
-### 17.1 TCP IO worker
+### 16.1 TCP IO worker
 
 `SocketTransport` 已实现：
 
@@ -917,18 +874,20 @@ sequenceDiagram
 - 250 → 500 → 1000 → 2000 → 4000 ms 指数退避。
 - close Socket 解除阻塞 read，并做有界 join。
 
-### 17.2 Python deterministic runtime
+### 16.2 Python deterministic runtime
 
-后续 Python 端需要：
+Python runtime 已实现：
 
 - 每条连接独立 Agent context。
 - 严格解析相同 schema。
 - 只根据当前私有 observation 产生白名单 skill。
 - 支持 normal、delay、malformed、disconnect、no-read 故障模式。
 
-### 17.3 Enemy/Game 生产接线
+完整说明见 [`agentarchitecture.md`](agentarchitecture.md)。
 
-后续 Java 生产路径需要：
+### 16.3 Enemy/Game 生产接线
+
+当前 Java 生产路径已经：
 
 - 每个 Enemy attach/detach 自己的 AgentSession。
 - 新游戏、读档和换层创建新 run/session identity。
@@ -936,12 +895,12 @@ sequenceDiagram
 - `AgentHandler` 把合法 request response 转交 `DecisionValidator`。
 - bridge disabled 时不创建网络线程，但仍保持现有本地 AI Tick。
 
-Python runtime 与生产接线完成前，不应把当前 localhost transport 测试描述为
-Java ↔ Python 端到端闭环。
+当前代码已经形成 Java ↔ Python ↔ ActionOutcome 的完整运行路径。普通 `Main` 默认关闭
+Bridge，因此 runtime 单独发出 ready 信号仍不表示当前交互式进程已经连接。
 
 ---
 
-## 18. 必须长期保持的不变量
+## 17. 必须长期保持的不变量
 
 1. 一个 Enemy 一份独立 Session，不共享请求上下文。
 2. 同时最多一个有效 in-flight；取消未确认前不启动并发新请求。
@@ -958,7 +917,7 @@ Java ↔ Python 端到端闭环。
 
 ---
 
-## 19. 最短代码阅读顺序
+## 18. 最短代码阅读顺序
 
 想理解当前 Session，只需按以下顺序：
 
@@ -973,8 +932,6 @@ Java ↔ Python 端到端闭环。
 9. [`AgentSessionConfig`](byog/Bridge/AgentSessionConfig.java)
 10. [`MonotonicClock`](byog/Bridge/MonotonicClock.java)
 11. [`AgentProtocol` 与 codec](byog/Bridge/AgentProtocol.java)
-12. [`AgentSessionTest`](byog/Test/AgentSessionTest.java)
-13. [`SocketTransportTest`](byog/Bridge/SocketTransportTest.java)
 
 读完第 3 项可以理解 single in-flight 和 deadline；读完第 5 项可以理解线程边界和背压；
-读完最后两项可以看到状态转换与真实 transport 边界怎样分别验证。
+读完第 7 项可以看到 Session 如何把连接、读写和重连交给 transport。

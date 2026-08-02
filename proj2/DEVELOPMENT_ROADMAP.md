@@ -117,24 +117,53 @@
 
 **本阶段不做**：真实 LLM 推理、完整多步骤条件计划、敌人间通信或复杂战术技能库。
 
+### 阶段 2.5：持久世界状态与可读敌人感知
+
+**前置输入**：Phase 2 已验收的异步传输、私有 Observation、分层仲裁、单 Action cadence、
+commit barrier、deterministic fake runtime 与 Completion。
+
+**目标**：在接入真实模型前补齐跨楼层资源压力、命名世界存档和可被玩家理解的敌人感知/巡视规则，
+并把 Phase 3 需要的稳定世界身份、Observation 与回归基线一次性固定下来。
+
+**交付物**：
+
+- 显式 `PlayerRunState`：当前 HP 跨楼层保留；当前蓄力读档恢复、换层清零；未来整局成长与当前楼层状态边界形成文档契约。
+- healthpack 需求中的确定性苹果生成、拾取、治疗、剩余状态保存与 Agent 隐藏规则。
+- 不限数量的命名世界存档：创建、摘要列表、读取、覆盖、原子替换和坏档隔离；不迁移开发期旧存档。
+- 稳定 `worldId` 与每次运行重建的 `runId`；保存时间、楼层、HP、难度等世界摘要。
+- Enemy 最大 HP、四向 Facing、动作朝向语义、可保存巡视状态和原地 Turn/Wait 原子动作。
+- 原全向菱形的一半作为默认 directional FOV，并保留墙壁遮挡与可保存的 omnidirectional A/B baseline。
+- 只读私有 Observation 的确定性巡视：持续目标、到达停留、顺时针扫描、动态占位局部恢复和 reflex 中断。
+- 底部悬停信息条、敌人方向标记、单敌人/全局 FOV 显示和苹果图片/fallback。
+- `agent-session.v1`、`private-observation.v2`、`agent-runtime.trace.v2`、跨语言 fixtures、固定场景和 no-cheat 回归。
+
+**完成标准**：玩家 HP、苹果、命名世界和当前楼层敌人状态可正确保存/恢复；相同输入产生相同苹果、
+初始朝向和巡视行为；背后或墙后的玩家不进入敌人 Observation；玩家可以从朝向标记和 FOV 显示理解规则；
+全向 baseline 与 Phase 2 的 Session、deadline、cancel、fallback、feedback 和非阻塞测试全部通过；
+`PHASE_2DOT5_COMPLETION.md` 留下可复查证据。
+
+**本阶段不做**：背包/装备/永久成长、敌人地图意识、跨楼层记忆、存档删除/重命名/版本迁移、周期自动存档、
+真实模型、LangGraph、Tool Calling、复杂战术 skill 或多 Agent 通信。
+
 ### 阶段 3：单敌人 Agent Runtime
 
-**前置输入**：Phase 2 已验收的异步传输、版本化 schema、过期结果规则和 deterministic fake runtime。
+**前置输入**：Phase 2.5 已验收的命名世界状态、稳定 `worldId`、版本化私有 Observation、朝向/FOV、
+确定性巡视、跨语言 fixtures、过期结果规则和 deterministic fake runtime。
 
 **目标**：接入第一个真正有状态、能使用工具的敌人 Agent，并建立无需改动通信骨架即可扩展战术表达和确定性技能的接口。
 
 **交付物**：
 
 - 当前稳定版本的 Python、LangGraph/LangChain 依赖与锁文件。
-- 按 `runId / floorId / agentId` 隔离的 Agent state 和 checkpoint。
+- 按 `worldId / floorId / agentId` 隔离的 Agent state 和 checkpoint；`runId` 继续隔离当前运行的旧连接与迟到响应。
 - 条件化 Tool Calling 循环，并设置最大轮数与 deadline。
-- 模型产生的版本化 `StrategicIntent`：不能冻结为仅有 `goal + target`；至少支持类型化 `skill`、受约束参数、有效期、中断策略和可扩展的计划元数据。
+- 全部 deterministic/model brain、Java/Python codec 和 fixtures 一次性硬切 `strategic-intent.v2`；不保留 v1 双读或降级输出。v2 不能冻结为仅有 `goal + target`，至少支持类型化 `skill`、受约束参数、有效期、中断策略和可扩展的计划元数据。
 - Java 战术技能注册/执行 seam：把受支持的 skill 转换为确定性规划器和原子动作；未知 skill、非法参数、前提不满足和不可达目标必须显式拒绝。
 - Python schema 校验和 Java 权威二次校验。
 - 全局推理调度与预算：限制整个遭遇中的模型并发、排队长度和调用量；调度器只能安排调用，不能合并不同敌人的私有上下文或知识。
-- 可查看的模型、工具、延迟、token、校验和 fallback trace。
+- `agent-model.trace.v1` 与 `agent-runtime.trace.v3`：可查看并关联模型、工具、延迟、token、校验和 fallback。
 
-**完成标准**：Agent 只能使用 observation 中的信息；确实发生模型—工具—模型循环；受支持 skill 能通过确定性执行 seam 落为动作；未知、非法或不可达意图被拒绝；多个敌人的上下文不会串线；同时活跃敌人增多时模型调用仍受全局预算约束且游戏线程不阻塞。
+**完成标准**：Agent 只能使用 observation 中的信息；确实发生模型—工具—模型循环；同一命名世界同一楼层读档可恢复对应敌人的有界 checkpoint，而新世界或新楼层冷启动；受支持 skill 能通过确定性执行 seam 落为动作；未知、非法或不可达意图被拒绝；多个敌人的上下文不会串线；同时活跃敌人增多时模型调用仍受全局预算约束且游戏线程不阻塞。
 
 **本阶段不做**：完整复杂战术技能库、多个敌人共享上下文、自动共享黑板、跨楼层长期记忆。
 
@@ -217,6 +246,7 @@
 | 0 | 固定场景、headless runner、canonical trace、测试入口、Completion |
 | 1 | Observation schema、稳定身份、no-cheat 测试、感知样例、Completion |
 | 2 | 双向消息 schema、fake runtime、AgentSession、有界队列、双速执行骨架、时效/过期/非阻塞证据、Completion |
+| 2.5 | PlayerRunState、苹果、命名世界存档、worldId、Facing/FOV、确定性巡视、Observation/trace/fixtures、Completion |
 | 3 | Agent graph、checkpoint key、tool/intent/skill schema、确定性执行 seam、validator、全局推理预算、trace、Completion |
 | 4 | 带 plan/step 关联的 ActionOutcome、多步骤执行契约、事件触发与 replan 规则、延迟/回退证据、Completion |
 | 5 | MessageEvent、传播与阻断规则、RoleIntent/协作来源、双守卫场景证据、Completion |
@@ -233,6 +263,10 @@
 
 阶段 0–6 合起来构成第一个 Agent MVP；中间阶段只是可验证的工程增量，不代表项目将 Agent 技术推迟到以后。
 
-Phase 0 与 Phase 1 已留下 Completion 和对应 artifacts；Phase 1.5 是可视化增强，不作为 Agent 主线进入 Phase 2 的阻塞 gate。当前规划入口是 **Phase 2 Specification 对齐与重新审批**：现有 `PHASE_2_SPEC.md` 必须根据本 Roadmap、`AI_TICK_ARCHITECTURE.md`、Phase 1 Completion 和当前代码重新审计，不能继续沿用同步 Brain、单次 request/response 或旧异步 mailbox 假设。
+Phase 0、Phase 1 和 Phase 2 已留下 Completion 与对应 artifacts；Phase 1.5 是可视化增强，不是 Agent 主线 gate。
+Phase 2 的最终 commit 尚未回填，但当前工作树已有 Completion 记录的完整验收证据。
 
-Phase 2 Spec 获批前，不开始通信或主循环重构。Spec 必须明确双速控制、AgentSession、有界队列、soft/hard deadline、单 in-flight、observation 合并、IntentLease/IntentArbiter、world commit barrier、迟到响应规则以及相应的 deterministic fake runtime 验收矩阵。
+当前规划入口是 **Phase 2.5 实现与验收**。`PHASE_2DOT5_SPEC.md` 和
+`PHASE_2DOT5_BUILD_GUIDE.md` 已根据 Intent、Roadmap、AI tick 架构、Phase 2 Completion、healthpack 需求、
+当前代码和 Builder 决定建立。Phase 2.5 Completion 关闭前，不开始 Phase 3 的真实模型、LangGraph、
+Tool Calling、skill registry 或 checkpoint 实现。
