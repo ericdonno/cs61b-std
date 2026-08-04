@@ -26,9 +26,9 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * Deterministic Step 2.2 tests for the bridge-disabled production AI loop.
+ * Deterministic tests for the bridge-disabled production AI loop.
  */
-public class Phase2AiTickTest {
+public class AgentAiTickTest {
 
     /** ActionQueue keeps only a bounded future prefix across ticks. */
     @Test
@@ -57,7 +57,7 @@ public class Phase2AiTickTest {
     }
 
     /**
-     * P2-A09: one cooldown attempts one action. A blocked plan is retried on
+     * Arbiter-A09: one cooldown attempts one action. A blocked plan is retried on
      * a later logical tick, not by consuming several queued actions at once.
      */
     @Test
@@ -85,7 +85,7 @@ public class Phase2AiTickTest {
     }
 
     /**
-     * P2-A10: outcome.afterPosition and the new observation are completed only
+     * Arbiter-A10: outcome.afterPosition and the new observation are completed only
      * after EntityManager has committed the move.
      */
     @Test
@@ -124,16 +124,16 @@ public class Phase2AiTickTest {
                 fixture.entityMgr.findEntityAt(new Position(2, 1)));
         assertEquals(AgentProtocol.DecisionSource.LOCAL_FALLBACK,
                 outcome.getDecisionSource());
-        assertEquals("phase2-test", outcome.getRunId());
+        assertEquals("agent-test-run", outcome.getRunId());
         assertEquals(3, outcome.getFloorId());
     }
 
     /**
-     * P2-R02: the production split loop preserves the Phase 1 increment-first
+     * The production split loop preserves the increment-first
      * cooldown cadence. moveInterval=3 acts on ticks 2, 5, ...
      */
     @Test
-    public void phase1_action_cadence_preserved() {
+    public void action_cadence_preserved() {
         Fixture fixture = fixture(3, new Position(1, 1),
                 new Position(7, 1));
         fixture.prime();
@@ -209,7 +209,7 @@ public class Phase2AiTickTest {
         }
 
         private AiTickContext context(long tick) {
-            return new AiTickContext("phase2-test", 3, tick);
+            return new AiTickContext("agent-test-run", 3, tick);
         }
 
         private void prime() {

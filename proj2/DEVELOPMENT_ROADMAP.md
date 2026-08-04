@@ -264,9 +264,9 @@ commit barrier、deterministic fake runtime 与 Completion。
 阶段 0–6 合起来构成第一个 Agent MVP；中间阶段只是可验证的工程增量，不代表项目将 Agent 技术推迟到以后。
 
 Phase 0、Phase 1 和 Phase 2 已留下 Completion 与对应 artifacts；Phase 1.5 是可视化增强，不是 Agent 主线 gate。
-Phase 2 的最终 commit 尚未回填，但当前工作树已有 Completion 记录的完整验收证据。
+Phase 2 与 Phase 2.5 的最终 commit 均尚未回填，但当前工作树已有 Completion 记录的完整验收证据。
 
-当前规划入口是 **Phase 2.5 实现与验收**。`PHASE_2DOT5_SPEC.md` 和
-`PHASE_2DOT5_BUILD_GUIDE.md` 已根据 Intent、Roadmap、AI tick 架构、Phase 2 Completion、healthpack 需求、
-当前代码和 Builder 决定建立。Phase 2.5 Completion 关闭前，不开始 Phase 3 的真实模型、LangGraph、
-Tool Calling、skill registry 或 checkpoint 实现。
+Phase 2.5 自动验收已完成：`PHASE_2DOT5_COMPLETION.md` 记录了 165 个确定性测试、
+真实进程集成、共享 fixtures 与领域命名迁移证据。剩余的人工 UI 视觉验收与最终 commit
+回填由用户确认；在 `PHASE_2DOT5_COMPLETION.md` 的 Definition of Done 全部勾选前，
+不开始 Phase 3 的真实模型、LangGraph、Tool Calling、skill registry 或 checkpoint 实现。

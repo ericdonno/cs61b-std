@@ -13,9 +13,9 @@ import java.util.Objects;
 public final class AgentProtocol {
 
     /** 通用信封版本 */
-    public static final String ENVELOPE_VERSION = "phase2.session.v1";
+    public static final String ENVELOPE_VERSION = "agent-session.v1";
     /** observation payload 版本 */
-    public static final String OBSERVATION_VERSION = "private-observation.v1";
+    public static final String OBSERVATION_VERSION = "private-observation.v2";
     /** intent payload 版本 */
     public static final String INTENT_VERSION = "strategic-intent.v1";
 
@@ -59,14 +59,17 @@ public final class AgentProtocol {
 
     /** 完整身份元组，后续 AgentSession 用这些字段校验响应是否有效 */
     public static final class Identity {
+        public final String worldId;
         public final String runId;
         public final int floorId;
         public final String agentId;
         public final long sessionEpoch;
         public final long requestGeneration;
 
-        public Identity(String runId, int floorId, String agentId,
-                        long sessionEpoch, long requestGeneration) {
+        public Identity(String worldId, String runId, int floorId,
+                        String agentId, long sessionEpoch,
+                        long requestGeneration) {
+            this.worldId = worldId;
             this.runId = runId;
             this.floorId = floorId;
             this.agentId = agentId;
@@ -80,6 +83,7 @@ public final class AgentProtocol {
         public final String schemaVersion;
         public final String messageId;
         public final long messageSeq;
+        public final String worldId;
         public final String runId;
         public final int floorId;
         public final String agentId;
@@ -89,8 +93,8 @@ public final class AgentProtocol {
         public final MessageData data;
 
         public Envelope(String schemaVersion, String messageId, long messageSeq,
-                        String runId, int floorId, String agentId,
-                        long sessionEpoch, long logicalTick,
+                        String worldId, String runId, int floorId,
+                        String agentId, long sessionEpoch, long logicalTick,
                         MessageType type, MessageData data) {
             Objects.requireNonNull(type, "type");
             Objects.requireNonNull(data, "data");
@@ -102,6 +106,7 @@ public final class AgentProtocol {
             this.schemaVersion = schemaVersion;
             this.messageId = messageId;
             this.messageSeq = messageSeq;
+            this.worldId = worldId;
             this.runId = runId;
             this.floorId = floorId;
             this.agentId = agentId;
@@ -139,6 +144,7 @@ public final class AgentProtocol {
             long observationSeq,
             long requestGeneration,
             long observedAtTurn,
+            String visionMode,
             SelfData self,
             List<VisibleTileData> visibleTiles,
             List<VisibleEntityData> visibleEntities,
@@ -149,6 +155,7 @@ public final class AgentProtocol {
         public ObservationData {
             Objects.requireNonNull(observationVersion, "observationVersion");
             Objects.requireNonNull(decisionId, "decisionId");
+            Objects.requireNonNull(visionMode, "visionMode");
             Objects.requireNonNull(self, "self");
             visibleTiles = List.copyOf(visibleTiles);
             visibleEntities = List.copyOf(visibleEntities);
@@ -311,9 +318,11 @@ public final class AgentProtocol {
     }
 
     /** observation 中的自身状态 */
-    public record SelfData(PositionData position, int hp) {
+    public record SelfData(
+            PositionData position, int hp, int maxHp, String facing) {
         public SelfData {
             Objects.requireNonNull(position, "position");
+            Objects.requireNonNull(facing, "facing");
         }
     }
 

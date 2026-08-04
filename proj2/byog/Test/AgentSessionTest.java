@@ -40,7 +40,7 @@ public class AgentSessionTest {
         AgentSession session = new AgentSession(
                 AgentSessionConfig.builder().enabled(false).build(),
                 new AgentProtocol.Identity(
-                        RUN_ID, FLOOR_ID, "guard-a", 0, 0),
+                        "world-test", RUN_ID, FLOOR_ID, "guard-a", 0, 0),
                 new FakeClock(),
                 new IdGenerator.DeterministicIdGenerator(
                         "disabled-decision", "disabled-message"),
@@ -555,7 +555,7 @@ public class AgentSessionTest {
                 .maxInboundPerPoll(8)
                 .build();
         AgentProtocol.Identity identity = new AgentProtocol.Identity(
-                RUN_ID, FLOOR_ID, agentId, 0, 0);
+                "world-test", RUN_ID, FLOOR_ID, agentId, 0, 0);
         InMemoryTransport transport = new InMemoryTransport();
         AgentSession session = new AgentSession(
                 config, identity, clock,
@@ -701,7 +701,7 @@ public class AgentSessionTest {
                 AgentProtocol.MessageData data) {
             return new AgentProtocol.Envelope(
                     schemaVersion, messageId, source.messageSeq,
-                    runId, floorId, agentId, sessionEpoch,
+                    "world-test", runId, floorId, agentId, sessionEpoch,
                     source.logicalTick, source.type, data);
         }
     }
@@ -731,9 +731,10 @@ public class AgentSessionTest {
 
         private ObservationEnvelope observation(long sequence) {
             return PerceptionSystem.computeObservation(
-                    RUN_ID, FLOOR_ID, sequence,
+                    "world-test", RUN_ID, FLOOR_ID, sequence,
                     encounter.getWorld(), encounter.getEntityMgr(),
-                    enemy, encounter.player(), 7, sequence);
+                    enemy, encounter.player(), 7,
+                    byog.Common.VisionMode.DIRECTIONAL, sequence);
         }
 
         private ActionOutcome outcome(int actionIndex) {
@@ -858,6 +859,7 @@ public class AgentSessionTest {
                     AgentProtocol.ENVELOPE_VERSION,
                     "inbound-" + nextInboundSequence,
                     nextInboundSequence++,
+                    identity.worldId,
                     identity.runId,
                     identity.floorId,
                     identity.agentId,
@@ -874,7 +876,7 @@ public class AgentSessionTest {
                     AgentProtocol.ENVELOPE_VERSION,
                     "inbound-" + nextInboundSequence,
                     nextInboundSequence++,
-                    RUN_ID, FLOOR_ID, "guard-a", 1, 0,
+                    "world-test", RUN_ID, FLOOR_ID, "guard-a", 1, 0,
                     AgentProtocol.MessageType.HEARTBEAT,
                     new AgentProtocol.HeartbeatData(0));
         }
@@ -887,6 +889,7 @@ public class AgentSessionTest {
                     AgentProtocol.ENVELOPE_VERSION,
                     "inbound-" + nextInboundSequence,
                     nextInboundSequence++,
+                    request.worldId,
                     request.runId,
                     request.floorId,
                     request.agentId,

@@ -1,6 +1,5 @@
 package byog.Test;
 
-import byog.Entity.EntityManager;
 import byog.Entity.Enemy;
 import byog.Entity.Player;
 import byog.Trace.AgentTrace;
@@ -8,26 +7,25 @@ import byog.TileEngine.TETile;
 import byog.lab5.Position;
 
 /**
- * Compatibility adapter for historical Phase 1 tests.
+ * Compatibility adapter for the historical full-world-snapshot tests.
  * New tests should use {@link EncounterHarness} directly.
  */
-public final class Phase1EncounterHarness {
+public final class LegacyEncounterHarness {
     private final EncounterHarness delegate;
 
-    private Phase1EncounterHarness(EncounterHarness delegate) {
+    private LegacyEncounterHarness(EncounterHarness delegate) {
         this.delegate = delegate;
     }
 
-    public static Phase1EncounterHarness fromAscii(
+    public static LegacyEncounterHarness fromAscii(
             String[] ascii, int playerHp, long guardASeed, long guardBSeed) {
-        return new Phase1EncounterHarness(EncounterHarness.fromAscii(
-                EncounterHarness.Mode.PRIVATE_PERCEPTION, ascii, playerHp,
+        return new LegacyEncounterHarness(EncounterHarness.fromAscii(
+                EncounterHarness.Mode.LEGACY, ascii, playerHp,
                 guardASeed, guardBSeed));
     }
 
-    public static Phase1EncounterHarness baselineTwoGuardsV1() {
-        return new Phase1EncounterHarness(
-                EncounterHarness.privatePerceptionV1());
+    public static LegacyEncounterHarness baselineTwoGuardsV1() {
+        return new LegacyEncounterHarness(EncounterHarness.legacyV1());
     }
 
     public void step() {
@@ -48,14 +46,6 @@ public final class Phase1EncounterHarness {
 
     public TETile[][] terrainCopy() {
         return delegate.terrainCopy();
-    }
-
-    public TETile[][] getWorld() {
-        return delegate.getWorld();
-    }
-
-    public EntityManager getEntityMgr() {
-        return delegate.getEntityMgr();
     }
 
     public Player player() {

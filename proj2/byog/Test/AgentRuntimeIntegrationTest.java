@@ -349,7 +349,7 @@ public class AgentRuntimeIntegrationTest {
         return new AgentSession(
                 config,
                 new AgentProtocol.Identity(
-                        RUN_ID, FLOOR_ID, enemy.getAgentId(), 0, 0),
+                        "world-test", RUN_ID, FLOOR_ID, enemy.getAgentId(), 0, 0),
                 MonotonicClock.systemClock());
     }
 

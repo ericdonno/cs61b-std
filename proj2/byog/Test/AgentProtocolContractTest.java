@@ -26,10 +26,10 @@ import java.util.Map;
 import static org.junit.Assert.*;
 
 /**
- * Phase 2 协议层测试（P2-P01 至 P2-P06）。
+ * 协议层测试：严格编解码、身份校验与拒绝路径。
  * 纯 Java、无网络、无 sleep，验证 codec 与 observation 快照的知识边界。
  */
-public class Phase2ProtocolTest {
+public class AgentProtocolContractTest {
 
     private static final String RUN_ID = "test-run-001";
     private static final int FLOOR_ID = 1;
@@ -38,14 +38,14 @@ public class Phase2ProtocolTest {
     private static final long REQUEST_GENERATION = 1;
     private static final long LOGICAL_TICK = 42;
 
-    // ────────── P2-P01 ──────────
+    // ────────── Protocol-P01 ──────────
 
-    /** P2-P01：8 种消息类型 round-trip 字段不丢失 */
+    /** Protocol-P01：8 种消息类型 round-trip 字段不丢失 */
     @Test
     public void protocol_round_trip() {
         IdGenerator idGen = new IdGenerator.DeterministicIdGenerator("decision", "msg");
         AgentProtocol.Identity identity = new AgentProtocol.Identity(
-                RUN_ID, FLOOR_ID, AGENT_ID, SESSION_EPOCH, REQUEST_GENERATION);
+                "world-test", RUN_ID, FLOOR_ID, AGENT_ID, SESSION_EPOCH, REQUEST_GENERATION);
 
         // 1. observation
         AgentProtocol.ObservationData observationData =
@@ -156,9 +156,9 @@ public class Phase2ProtocolTest {
         assertEquals("data", original.data, decoded.data);
     }
 
-    // ────────── P2-P02 ──────────
+    // ────────── Protocol-P02 ──────────
 
-    /** P2-P02：坏 JSON、重复 key、错误类型、尾随垃圾、非法转义被拒绝 */
+    /** Protocol-P02：坏 JSON、重复 key、错误类型、尾随垃圾、非法转义被拒绝 */
     @Test
     public void malformed_or_duplicate_key_rejected() {
         // 缺引号
@@ -197,7 +197,7 @@ public class Phase2ProtocolTest {
         IdGenerator wrongTypeIds =
                 new IdGenerator.DeterministicIdGenerator("decision", "msg");
         AgentProtocol.Identity identity = new AgentProtocol.Identity(
-                RUN_ID, FLOOR_ID, AGENT_ID, SESSION_EPOCH, REQUEST_GENERATION);
+                "world-test", RUN_ID, FLOOR_ID, AGENT_ID, SESSION_EPOCH, REQUEST_GENERATION);
         String wrongType = buildEnvelopeJson(
                 AgentProtocol.MessageType.HEARTBEAT,
                 wrongTypeData, wrongTypeIds, identity)
@@ -221,9 +221,9 @@ public class Phase2ProtocolTest {
         assertEquals("failure reason for: " + json, expected, actual);
     }
 
-    // ────────── P2-P03 ──────────
+    // ────────── Protocol-P03 ──────────
 
-    /** P2-P03：超 64KiB 或嵌套 >16 被拒绝 */
+    /** Protocol-P03：超 64KiB 或嵌套 >16 被拒绝 */
     @Test
     public void oversize_and_deep_frame_rejected() {
         // 超 64KiB
@@ -255,26 +255,26 @@ public class Phase2ProtocolTest {
                 ((DecodeResult.Failure) result).failure().reason());
     }
 
-    // ────────── P2-P04 ──────────
+    // ────────── Protocol-P04 ──────────
 
-    /** P2-P04：observation 只序列化可见 tile，墙后坐标不出现 */
+    /** Protocol-P04：observation 只序列化可见 tile，墙后坐标不出现 */
     @Test
     public void observation_serializes_only_visible_tiles() {
-        Phase1EncounterHarness harness = Phase1EncounterHarness.baselineTwoGuardsV1();
+        PrivatePerceptionEncounterHarness harness = PrivatePerceptionEncounterHarness.baselineTwoGuardsV1();
 
         // guardA 能看到玩家
         ObservationEnvelope obsA = PerceptionSystem.computeObservation(
-                RUN_ID, FLOOR_ID, 0,
+                "world-test", RUN_ID, FLOOR_ID, 0,
                 harness.getWorld(), harness.getEntityMgr(),
                 harness.guardA(), harness.player(),
-                7, LOGICAL_TICK);
+                7, byog.Common.VisionMode.DIRECTIONAL, LOGICAL_TICK);
 
         // guardB 看不到玩家（被墙遮挡）
         ObservationEnvelope obsB = PerceptionSystem.computeObservation(
-                RUN_ID, FLOOR_ID, 0,
+                "world-test", RUN_ID, FLOOR_ID, 0,
                 harness.getWorld(), harness.getEntityMgr(),
                 harness.guardB(), harness.player(),
-                7, LOGICAL_TICK);
+                7, byog.Common.VisionMode.DIRECTIONAL, LOGICAL_TICK);
 
         Position playerPos = harness.player().getPosition();
 
@@ -309,7 +309,7 @@ public class Phase2ProtocolTest {
         AgentProtocol.ObservationData dataA = buildObservationDataFromEnvelope(obsA, idGen);
         AgentProtocol.Envelope envA = buildEnvelope(
                 AgentProtocol.MessageType.OBSERVATION, dataA,
-                new AgentProtocol.Identity(RUN_ID, FLOOR_ID, AGENT_ID, SESSION_EPOCH, REQUEST_GENERATION),
+                new AgentProtocol.Identity("world-test", RUN_ID, FLOOR_ID, AGENT_ID, SESSION_EPOCH, REQUEST_GENERATION),
                 idGen, LOGICAL_TICK);
         String jsonA = AgentProtocolCodec.encodeEnvelope(envA);
 
@@ -317,7 +317,7 @@ public class Phase2ProtocolTest {
         AgentProtocol.ObservationData dataB = buildObservationDataFromEnvelope(obsB, idGen);
         AgentProtocol.Envelope envB = buildEnvelope(
                 AgentProtocol.MessageType.OBSERVATION, dataB,
-                new AgentProtocol.Identity(RUN_ID, FLOOR_ID, "guard-b", SESSION_EPOCH, REQUEST_GENERATION),
+                new AgentProtocol.Identity("world-test", RUN_ID, FLOOR_ID, "guard-b", SESSION_EPOCH, REQUEST_GENERATION),
                 idGen, LOGICAL_TICK);
         String jsonB = AgentProtocolCodec.encodeEnvelope(envB);
 
@@ -373,15 +373,16 @@ public class Phase2ProtocolTest {
                         .anyMatch(e -> "PLAYER".equals(e.type())));
     }
 
-    // ────────── P2-P05 ──────────
+    // ────────── Protocol-P05 ──────────
 
-    /** P2-P05：未知消息类型非致命，返回 Failure 而非抛异常 */
+    /** Protocol-P05：未知消息类型非致命，返回 Failure 而非抛异常 */
     @Test
     public void unknown_message_type_nonfatal() {
         JsonObject obj = new JsonObject(new LinkedHashMap<>());
         obj.members().put("schemaVersion", new JsonString(AgentProtocol.ENVELOPE_VERSION));
         obj.members().put("messageId", new JsonString("msg-1"));
         obj.members().put("messageSeq", new AgentProtocolCodec.JsonNumber(0, true));
+        obj.members().put("worldId", new JsonString("world-test"));
         obj.members().put("runId", new JsonString(RUN_ID));
         obj.members().put("floorId", new AgentProtocolCodec.JsonNumber(FLOOR_ID, true));
         obj.members().put("agentId", new JsonString(AGENT_ID));
@@ -399,14 +400,14 @@ public class Phase2ProtocolTest {
                 ((DecodeResult.Failure) result).failure().reason());
     }
 
-    // ────────── P2-P06 ──────────
+    // ────────── Protocol-P06 ──────────
 
-    /** P2-P06：未知 skill 或未知 parameter 被拒绝 */
+    /** Protocol-P06：未知 skill 或未知 parameter 被拒绝 */
     @Test
     public void unknown_skill_or_parameter_rejected() {
         IdGenerator idGen = new IdGenerator.DeterministicIdGenerator("decision", "msg");
         AgentProtocol.Identity identity = new AgentProtocol.Identity(
-                RUN_ID, FLOOR_ID, AGENT_ID, SESSION_EPOCH, REQUEST_GENERATION);
+                "world-test", RUN_ID, FLOOR_ID, AGENT_ID, SESSION_EPOCH, REQUEST_GENERATION);
 
         // 未知 skill "FLY"
         // Java enum 无法表达未知 skill，因此直接构造 wire JSON。
@@ -452,6 +453,7 @@ public class Phase2ProtocolTest {
                 AgentProtocol.ENVELOPE_VERSION,
                 idGen.newMessageId(),
                 idGen.nextMessageSeq(),
+                identity.worldId,
                 identity.runId,
                 identity.floorId,
                 identity.agentId,
@@ -480,8 +482,9 @@ public class Phase2ProtocolTest {
                 5,
                 2,
                 42,
+                "DIRECTIONAL",
                 new AgentProtocol.SelfData(
-                        new AgentProtocol.PositionData(9, 2), 20),
+                        new AgentProtocol.PositionData(9, 2), 20, 20, "EAST"),
                 tiles,
                 entities,
                 new ArrayList<>(),
@@ -516,11 +519,13 @@ public class Phase2ProtocolTest {
                 obs.getObservationSeq(),
                 REQUEST_GENERATION,
                 obs.getObservedAtTurn(),
+                "DIRECTIONAL",
                 new AgentProtocol.SelfData(
                         new AgentProtocol.PositionData(
                                 obs.getSelfPosition().x,
                                 obs.getSelfPosition().y),
-                        obs.getSelfHp()),
+                        obs.getSelfHp(), obs.getSelfMaxHp(),
+                        obs.getSelfFacing().name()),
                 tiles,
                 entities,
                 new ArrayList<>(),
@@ -637,6 +642,7 @@ public class Phase2ProtocolTest {
         obj.members().put("messageId", new JsonString(idGen.newMessageId()));
         obj.members().put("messageSeq", new AgentProtocolCodec.JsonNumber(
                 idGen.nextMessageSeq(), true));
+        obj.members().put("worldId", new JsonString(identity.worldId));
         obj.members().put("runId", new JsonString(identity.runId));
         obj.members().put("floorId", new AgentProtocolCodec.JsonNumber(identity.floorId, true));
         obj.members().put("agentId", new JsonString(identity.agentId));

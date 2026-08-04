@@ -22,23 +22,23 @@ import java.util.Set;
 import static org.junit.Assert.*;
 
 /**
- * Phase 0 固定遭遇的契约、确定性和不变量测试。
+ * 固定遭遇的契约、确定性和不变量测试。
  *
- * <p>本类按 Spec 中的 P0-T01 至 P0-T09 编号组织。测试不评价敌人是否“足够聪明”，
+ * <p>本类按 Spec 中的 Legacy-T01 至 Legacy-T09 编号组织。测试不评价敌人是否“足够聪明”，
  * 而是验证实验输入、调度证据和输出协议是否稳定：相同条件应产生相同 trace，
  * 每个 tick 的活实体必须满足世界不变量。</p>
  */
-public class Phase0EncounterTest {
+public class LegacyEncounterTest {
 
-    // ---------- P0-T01 ----------
+    // ---------- Legacy-T01 ----------
 
     /**
-     * P0-T01：锁定 v1 fixture 的外部契约。
+     * Legacy-T01：锁定 v1 fixture 的外部契约。
      * 坐标、尺寸和底层 terrain 一旦有意变化，应提升 scenarioVersion，而不是只改断言。
      */
     @Test
     public void fixtureHasExpectedLayout() {
-        Phase0EncounterHarness harness = Phase0EncounterHarness.baselineTwoGuardsV1();
+        LegacyEncounterHarness harness = LegacyEncounterHarness.baselineTwoGuardsV1();
         TETile[][] terrain = harness.terrainCopy();
         assertEquals("width", 17, harness.width());
         assertEquals("height", 8, harness.height());
@@ -67,31 +67,31 @@ public class Phase0EncounterTest {
         assertEquals("wall at (0,0)", Tileset.WALL, terrain[0][0]);
     }
 
-    // ---------- P0-T02 ----------
+    // ---------- Legacy-T02 ----------
 
-    /** P0-T02 子例：二维 ASCII 行宽不一致时必须 fail-fast。 */
+    /** Legacy-T02 子例：二维 ASCII 行宽不一致时必须 fail-fast。 */
     @Test(expected = IllegalArgumentException.class)
     public void fixtureRejectsNonUniformRows() {
-        Phase0EncounterTestHelper.buildFromAscii(new String[]{
+        LegacyEncounterTestHelper.buildFromAscii(new String[]{
             "#####",
             "##"
         });
     }
 
-    /** P0-T02 子例：协议未定义的字符不能被静默当成地板或墙。 */
+    /** Legacy-T02 子例：协议未定义的字符不能被静默当成地板或墙。 */
     @Test(expected = IllegalArgumentException.class)
     public void fixtureRejectsUnknownChar() {
-        Phase0EncounterTestHelper.buildFromAscii(new String[]{
+        LegacyEncounterTestHelper.buildFromAscii(new String[]{
             "###",
             "#X#",
             "###"
         });
     }
 
-    /** P0-T02 子例：玩家是 fixture 必需参与者。 */
+    /** Legacy-T02 子例：玩家是 fixture 必需参与者。 */
     @Test(expected = IllegalArgumentException.class)
     public void fixtureRejectsMissingPlayer() {
-        Phase0EncounterTestHelper.buildFromAscii(new String[]{
+        LegacyEncounterTestHelper.buildFromAscii(new String[]{
             "#####",
             "#.A.#",
             "#.B.#",
@@ -99,10 +99,10 @@ public class Phase0EncounterTest {
         });
     }
 
-    /** P0-T02 子例：guard-a 缺失时场景身份不完整。 */
+    /** Legacy-T02 子例：guard-a 缺失时场景身份不完整。 */
     @Test(expected = IllegalArgumentException.class)
     public void fixtureRejectsMissingGuardA() {
-        Phase0EncounterTestHelper.buildFromAscii(new String[]{
+        LegacyEncounterTestHelper.buildFromAscii(new String[]{
             "#####",
             "#P..#",
             "#.B.#",
@@ -110,10 +110,10 @@ public class Phase0EncounterTest {
         });
     }
 
-    /** P0-T02 子例：guard-b 缺失时场景身份不完整。 */
+    /** Legacy-T02 子例：guard-b 缺失时场景身份不完整。 */
     @Test(expected = IllegalArgumentException.class)
     public void fixtureRejectsMissingGuardB() {
-        Phase0EncounterTestHelper.buildFromAscii(new String[]{
+        LegacyEncounterTestHelper.buildFromAscii(new String[]{
             "#####",
             "#P..#",
             "#.A.#",
@@ -121,10 +121,10 @@ public class Phase0EncounterTest {
         });
     }
 
-    /** P0-T02 子例：楼梯坐标属于 v1 canonical state，不能缺失。 */
+    /** Legacy-T02 子例：楼梯坐标属于 v1 canonical state，不能缺失。 */
     @Test(expected = IllegalArgumentException.class)
     public void fixtureRejectsMissingStairs() {
-        Phase0EncounterTestHelper.buildFromAscii(new String[]{
+        LegacyEncounterTestHelper.buildFromAscii(new String[]{
             "#####",
             "#P..#",
             "#.A.#",
@@ -134,12 +134,12 @@ public class Phase0EncounterTest {
     }
 
     /**
-     * P0-T02 子例：同一种稳定身份只能出现一次。
+     * Legacy-T02 子例：同一种稳定身份只能出现一次。
      * 覆盖重复 P、A、B、stairs 全部四种角色。
      */
     @Test(expected = IllegalArgumentException.class)
     public void fixtureRejectsDuplicatePlayer() {
-        Phase0EncounterTestHelper.buildFromAscii(new String[]{
+        LegacyEncounterTestHelper.buildFromAscii(new String[]{
             "#####",
             "#P.P#",
             "#.A.#",
@@ -148,10 +148,10 @@ public class Phase0EncounterTest {
         });
     }
 
-    /** P0-T02 子例：guard-a 重复出现时场景身份有歧义。 */
+    /** Legacy-T02 子例：guard-a 重复出现时场景身份有歧义。 */
     @Test(expected = IllegalArgumentException.class)
     public void fixtureRejectsDuplicateGuardA() {
-        Phase0EncounterTestHelper.buildFromAscii(new String[]{
+        LegacyEncounterTestHelper.buildFromAscii(new String[]{
             "#####",
             "#P..#",
             "#.A.#",
@@ -160,10 +160,10 @@ public class Phase0EncounterTest {
         });
     }
 
-    /** P0-T02 子例：guard-b 重复出现时场景身份有歧义。 */
+    /** Legacy-T02 子例：guard-b 重复出现时场景身份有歧义。 */
     @Test(expected = IllegalArgumentException.class)
     public void fixtureRejectsDuplicateGuardB() {
-        Phase0EncounterTestHelper.buildFromAscii(new String[]{
+        LegacyEncounterTestHelper.buildFromAscii(new String[]{
             "#####",
             "#P..#",
             "#.B.#",
@@ -172,10 +172,10 @@ public class Phase0EncounterTest {
         });
     }
 
-    /** P0-T02 子例：楼梯重复出现时场景定义不明确。 */
+    /** Legacy-T02 子例：楼梯重复出现时场景定义不明确。 */
     @Test(expected = IllegalArgumentException.class)
     public void fixtureRejectsDuplicateStairs() {
-        Phase0EncounterTestHelper.buildFromAscii(new String[]{
+        LegacyEncounterTestHelper.buildFromAscii(new String[]{
             "#####",
             "#P.>#",
             "#.A.#",
@@ -184,45 +184,45 @@ public class Phase0EncounterTest {
         });
     }
 
-    // ---------- P0-T03 ----------
+    // ---------- Legacy-T03 ----------
 
     /**
-     * P0-T03：同一 JVM 中连续构建两份 fixture，初始 canonical state 必须相同。
+     * Legacy-T03：同一 JVM 中连续构建两份 fixture，初始 canonical state 必须相同。
      * 比较结果故意不包含全局自增 Entity.id。
      */
     @Test
     public void fixtureBuildIsDeterministic() {
-        Phase0EncounterHarness h1 = Phase0EncounterHarness.baselineTwoGuardsV1();
-        Phase0EncounterHarness h2 = Phase0EncounterHarness.baselineTwoGuardsV1();
+        LegacyEncounterHarness h1 = LegacyEncounterHarness.baselineTwoGuardsV1();
+        LegacyEncounterHarness h2 = LegacyEncounterHarness.baselineTwoGuardsV1();
         assertEquals("canonical states must be identical",
                 h1.canonicalState(), h2.canonicalState());
     }
 
-    // ---------- P0-T04 ----------
+    // ---------- Legacy-T04 ----------
 
     /**
-     * P0-T04：相同场景、种子、调度和 12 tick 输入必须产生字节一致的事件流。
-     * 这是 Phase 0 对行为确定性的核心证据。
+     * Legacy-T04：相同场景、种子、调度和 12 tick 输入必须产生字节一致的事件流。
+     * 这是对行为确定性的核心证据。
      */
     @Test
     public void sameRunProducesSameCanonicalTrace() {
-        Phase0EncounterHarness h1 = Phase0EncounterHarness.baselineTwoGuardsV1();
+        LegacyEncounterHarness h1 = LegacyEncounterHarness.baselineTwoGuardsV1();
         h1.runTicks(12);
-        Phase0EncounterHarness h2 = Phase0EncounterHarness.baselineTwoGuardsV1();
+        LegacyEncounterHarness h2 = LegacyEncounterHarness.baselineTwoGuardsV1();
         h2.runTicks(12);
         assertEquals("canonical trace must be byte-identical",
                 h1.canonicalTraceJson(), h2.canonicalTraceJson());
     }
 
-    // ---------- P0-T05 ----------
+    // ---------- Legacy-T05 ----------
 
     /**
-     * P0-T05：验证 fixture 确实在第一次决策中覆盖两个规则分支。
+     * Legacy-T05：验证 fixture 确实在第一次决策中覆盖两个规则分支。
      * A 距离玩家 6，应 CHASE；B 距离玩家 12，应 PATROL。
      */
     @Test
     public void bothGuardsProduceExpectedInitialIntent() {
-        Phase0EncounterHarness harness = Phase0EncounterHarness.baselineTwoGuardsV1();
+        LegacyEncounterHarness harness = LegacyEncounterHarness.baselineTwoGuardsV1();
         harness.runTicks(12);
 
         List<AgentTrace.TraceEvent> events = harness.getTraceSink().events();
@@ -250,15 +250,15 @@ public class Phase0EncounterTest {
         return null;
     }
 
-    // ---------- P0-T06 ----------
+    // ---------- Legacy-T06 ----------
 
     /**
-     * P0-T06：检查两名守卫是否都暴露 input、intent、attempt 和 result 四类证据。
+     * Legacy-T06：检查两名守卫是否都暴露 input、intent、attempt 和 result 四类证据。
      * 目标是确保 trace seam 覆盖完整决策生命周期，而不只是记录最终位置。
      */
     @Test
     public void traceContainsDecisionLifecycle() {
-        Phase0EncounterHarness harness = Phase0EncounterHarness.baselineTwoGuardsV1();
+        LegacyEncounterHarness harness = LegacyEncounterHarness.baselineTwoGuardsV1();
         harness.runTicks(12);
         List<AgentTrace.TraceEvent> events = harness.getTraceSink().events();
 
@@ -336,15 +336,15 @@ public class Phase0EncounterTest {
         }
     }
 
-    // ---------- P0-T07 ----------
+    // ---------- Legacy-T07 ----------
 
     /**
-     * P0-T07：初始状态以及每个 step 完成后都检查世界不变量。
+     * Legacy-T07：初始状态以及每个 step 完成后都检查世界不变量。
      * 中间逐 tick 检查可以发现“最终恢复正常、过程中曾短暂非法”的问题。
      */
     @Test
     public void liveEntitiesRespectWorldInvariants() {
-        Phase0EncounterHarness harness = Phase0EncounterHarness.baselineTwoGuardsV1();
+        LegacyEncounterHarness harness = LegacyEncounterHarness.baselineTwoGuardsV1();
         TETile[][] terrain = harness.terrainCopy();
 
         // 初始状态检查
@@ -357,7 +357,7 @@ public class Phase0EncounterTest {
         }
     }
 
-    private void assertInvariants(Phase0EncounterHarness harness, TETile[][] terrain) {
+    private void assertInvariants(LegacyEncounterHarness harness, TETile[][] terrain) {
         Player p = harness.player();
         Enemy a = harness.guardA();
         Enemy b = harness.guardB();
@@ -375,7 +375,7 @@ public class Phase0EncounterTest {
         assertTrue("guardB on standable tile",
                 Entity.canStandOn(b.getPosition(), terrain));
 
-        // 占位安全：只把活实体之间的位置唯一性当作 Phase 0 不变量。
+        // 占位安全：只把活实体之间的位置唯一性当作遗留不变量。
         if (p.isAlive()) {
             assertNotSame("player/guardA overlap", p.getPosition(), a.getPosition());
             assertNotSame("player/guardB overlap", p.getPosition(), b.getPosition());
@@ -385,7 +385,7 @@ public class Phase0EncounterTest {
         }
     }
 
-    private void assertInBounds(Position pos, Phase0EncounterHarness harness) {
+    private void assertInBounds(Position pos, LegacyEncounterHarness harness) {
         assertTrue("x out of bounds: " + pos.x,
                 pos.x >= 0 && pos.x < harness.width());
         assertTrue("y out of bounds: " + pos.y,
@@ -396,10 +396,10 @@ public class Phase0EncounterTest {
         assertFalse(msg, a.x == b.x && a.y == b.y);
     }
 
-    // ---------- P0-T08 ----------
+    // ---------- Legacy-T08 ----------
 
     /**
-     * P0-T08：程序生成世界的次要确定性 smoke test。
+     * Legacy-T08：程序生成世界的次要确定性 smoke test。
      * 它只证明相同非空 seed 在当前环境生成相同 terrain，不替代主 ASCII fixture。
      */
     @Test
@@ -435,15 +435,15 @@ public class Phase0EncounterTest {
         return sb.toString();
     }
 
-    // ---------- P0-T09 ----------
+    // ---------- Legacy-T09 ----------
 
-    /** P0-T09：旧 trace schema 保持隔离，但不锁死完整动作轨迹。 */
+    /** Legacy-T09：旧 trace schema 保持隔离，但不锁死完整动作轨迹。 */
     @Test
     public void legacyTraceKeepsStableSchemaBoundary() {
-        Phase0EncounterHarness harness = Phase0EncounterHarness.baselineTwoGuardsV1();
+        LegacyEncounterHarness harness = LegacyEncounterHarness.baselineTwoGuardsV1();
         harness.runTicks(2);
         String trace = harness.canonicalTraceJson();
-        assertTrue(trace.contains("\"schemaVersion\":\"phase0.trace.v1\""));
+        assertTrue(trace.contains("\"schemaVersion\":\"legacy-decision.trace.v1\""));
         assertFalse(trace.contains("\"visiblePlayer\""));
     }
 }

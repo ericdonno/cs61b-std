@@ -3,6 +3,7 @@ package byog.AI;
 import byog.Action.Action;
 import byog.Action.AttackAction;
 import byog.Action.MoveAction;
+import byog.Action.WaitAction;
 import byog.Common.Direction;
 import byog.Entity.Entity;
 import byog.Entity.EntityManager;
@@ -57,27 +58,30 @@ public class ClassicalPlanner {
     }
 
     /**
-     * 将战略意图翻译为 MoveAction 序列。
+     * 将战略意图翻译为动作序列。
      * @param intent    AI 大脑的战略意图
      * @param enemyPos  敌人当前位置
      * @param world     游戏世界瓦片数组
      * @param entityMgr 实体管理器，用于碰撞检测
-     * @param random    随机数生成器，用于不可达时生成占位动作
-     * @return 待执行的动作列表
+     * @param random    随机数生成器，用于攻击伤害等随机结算
+     * @return 待执行的动作列表；不可达时返回明确的 Wait，不做随机抖动
      */
     public static List<Action> translate(StrategicIntent intent, Position enemyPos,
                                               int enemyId, TETile[][] world,
                                               EntityManager entityMgr, Random random) {
         List<Action> actions = new ArrayList<>();
         Position targetPos = intent.getTargetPosition();
+        if (targetPos == null) {
+            // 意图没有明确目标（例如等待类 primitive）：明确返回等待，不崩溃。
+            actions.add(new WaitAction());
+            return actions;
+        }
 
         List<Position> path = BFSPathfinder.findPath(enemyPos, targetPos, world);
 
         if (path.isEmpty()) {
-            // 不可达：插入一个随机方向占位动作，防止敌人卡死
-            Direction[] directions = Direction.values();
-            Direction fallback = directions[random.nextInt(directions.length)];
-            actions.add(new MoveAction(fallback, entityMgr));
+            // 不可达：明确返回等待，禁止随机方向占位造成不可解释抖动。
+            actions.add(new WaitAction());
             return actions;
         }
 
@@ -89,21 +93,21 @@ public class ClassicalPlanner {
             prev = cur;
         }
 
-        // 根据 Strategy 追加到达目标后的行为
+        // 根据 Strategy 追加到达目标后的行为（原地等待，不改变朝向）
         StrategicIntent.Strategy strategy = intent.getStrategy();
         if (strategy == StrategicIntent.Strategy.AMBUSH) {
             for (int i = 0; i < 3; i++) {
-                actions.add(new MoveAction(null, entityMgr));
+                actions.add(new WaitAction());
             }
         } else if (strategy == StrategicIntent.Strategy.GUARD) {
-            actions.add(new MoveAction(null, entityMgr));
+            actions.add(new WaitAction());
         } else if (strategy == StrategicIntent.Strategy.ATTACK) {
             Direction attackDir = Direction.fromDelta(
                     targetPos.x - enemyPos.x, targetPos.y - enemyPos.y);
             if (attackDir != null) {
                 actions.add(new AttackAction(entityMgr, attackDir, random));
             } else {
-                actions.add(new MoveAction(null, entityMgr));
+                actions.add(new WaitAction());
             }
         }
 

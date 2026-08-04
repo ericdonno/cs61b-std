@@ -9,13 +9,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Phase 0 使用的最小结构化 trace（决策跟踪）协议。
+ * 最小结构化 trace（决策跟踪）协议。
  *
  * <p>这个类只负责描述和收集“敌人 AI 在一次更新中经历了什么”，不负责作出决策，
  * 也不允许改变 Brain、Planner、ActionQueue 或 Action 的执行结果。它是插在真实
  * {@link Enemy#updateAI} 调用链中的观测接缝（trace seam）。</p>
  *
- * <p>Phase 0 故意把所有类型收在一个容器类中，避免在实验基础设施尚未稳定时
+ * <p>早期版本故意把所有类型收在一个容器类中，避免在实验基础设施尚未稳定时
  * 引入额外框架或过多文件。事件只使用场景内稳定的 actorKey 和逻辑时间；
  * JVM 自增的 Entity.id、墙钟时间、对象 hash 和自由文本日志均不能进入
  * canonical（规范化）比较结果。</p>
@@ -26,9 +26,9 @@ public final class AgentTrace {
      * trace JSON 的结构版本。若将来改变字段或字段语义，应升级版本，
      * 不能让同一个版本号同时表示两种不兼容的事件协议。
      */
-    public static final String PHASE0_SCHEMA_VERSION = "phase0.trace.v1";
-    public static final String SCHEMA_VERSION = "phase1.trace.v1";
-    public static final String AGENT_SCHEMA_VERSION = "agent.trace.v1";
+    public static final String LEGACY_DECISION_TRACE_VERSION = "legacy-decision.trace.v1";
+    public static final String PRIVATE_PERCEPTION_TRACE_VERSION = "private-perception.trace.v1";
+    public static final String AGENT_RUNTIME_TRACE_VERSION = "agent-runtime.trace.v2";
 
     /**
      * 一次敌人决策的四个生命周期节点。
@@ -56,7 +56,10 @@ public final class AgentTrace {
         ACTION_FEEDBACK_ENQUEUED,
         OUTBOUND_MESSAGE_COALESCED,
         OUTBOUND_MESSAGE_DROPPED,
-        PROTOCOL_ERROR
+        PROTOCOL_ERROR,
+        FACING_CHANGED,
+        PATROL_TARGET_SELECTED,
+        PATROL_STATE_CHANGED
     }
 
     /**
@@ -80,7 +83,7 @@ public final class AgentTrace {
 
         public Context(String scenarioId, int scenarioVersion,
                        long logicalTick, String actorKey) {
-            this(SCHEMA_VERSION, scenarioId, scenarioVersion, logicalTick, actorKey);
+            this(PRIVATE_PERCEPTION_TRACE_VERSION, scenarioId, scenarioVersion, logicalTick, actorKey);
         }
 
         public Context(String schemaVersion, String scenarioId, int scenarioVersion,
@@ -149,6 +152,19 @@ public final class AgentTrace {
         public final String overrideReason;
         public final Integer actionIndex;
 
+        // ----- v2 感知/朝向/巡视关联字段 -----
+        public final String worldId;
+        public final String visionMode;
+        public final String selfFacing;
+        public final Integer selfHp;
+        public final Integer selfMaxHp;
+        public final String patrolMode;
+        public final Integer patrolTargetX;
+        public final Integer patrolTargetY;
+        public final Integer selectionOrdinal;
+        public final String beforeFacing;
+        public final String afterFacing;
+
         private TraceEvent(String schemaVersion, String scenarioId, int scenarioVersion,
                       long logicalTick, Integer actionOrdinal, String actorKey,
                       EventType eventType, String inputKind,
@@ -195,10 +211,21 @@ public final class AgentTrace {
             this.validationResult = null;
             this.overrideReason = null;
             this.actionIndex = null;
+            this.worldId = null;
+            this.visionMode = null;
+            this.selfFacing = null;
+            this.selfHp = null;
+            this.selfMaxHp = null;
+            this.patrolMode = null;
+            this.patrolTargetX = null;
+            this.patrolTargetY = null;
+            this.selectionOrdinal = null;
+            this.beforeFacing = null;
+            this.afterFacing = null;
         }
 
         private TraceEvent(AgentEventBuilder builder) {
-            this.schemaVersion = AGENT_SCHEMA_VERSION;
+            this.schemaVersion = AGENT_RUNTIME_TRACE_VERSION;
             this.scenarioId = null;
             this.scenarioVersion = 0;
             this.logicalTick = builder.logicalTick;
@@ -234,6 +261,17 @@ public final class AgentTrace {
             this.validationResult = builder.validationResult;
             this.overrideReason = builder.overrideReason;
             this.actionIndex = builder.actionIndex;
+            this.worldId = builder.worldId;
+            this.visionMode = builder.visionMode;
+            this.selfFacing = builder.selfFacing;
+            this.selfHp = builder.selfHp;
+            this.selfMaxHp = builder.selfMaxHp;
+            this.patrolMode = builder.patrolMode;
+            this.patrolTargetX = builder.patrolTargetX;
+            this.patrolTargetY = builder.patrolTargetY;
+            this.selectionOrdinal = builder.selectionOrdinal;
+            this.beforeFacing = builder.beforeFacing;
+            this.afterFacing = builder.afterFacing;
         }
 
         /**
@@ -253,7 +291,7 @@ public final class AgentTrace {
         }
 
         /**
-         * 记录私有感知结果。仅 Phase 1+ 的私有感知路径使用。
+         * 记录私有感知结果。仅私有感知路径使用。
          */
         public static TraceEvent observationGenerated(Context context,
                 boolean visiblePlayer, int visibleEntityCount, int fovTileCount) {
@@ -368,6 +406,17 @@ public final class AgentTrace {
         private Boolean visiblePlayer;
         private Integer visibleEntityCount;
         private Integer fovTileCount;
+        private String worldId;
+        private String visionMode;
+        private String selfFacing;
+        private Integer selfHp;
+        private Integer selfMaxHp;
+        private String patrolMode;
+        private Integer patrolTargetX;
+        private Integer patrolTargetY;
+        private Integer selectionOrdinal;
+        private String beforeFacing;
+        private String afterFacing;
 
         private AgentEventBuilder(
                 EventType eventType, String runId, int floorId,
@@ -413,6 +462,43 @@ public final class AgentTrace {
 
         public AgentEventBuilder observationSequence(long sequence) {
             observationSeq = sequence;
+            return this;
+        }
+
+        /** v2：世界身份。 */
+        public AgentEventBuilder world(String worldId) {
+            this.worldId = worldId;
+            return this;
+        }
+
+        /** v2：感知时的视野模式、自身朝向与 HP。 */
+        public AgentEventBuilder perception(
+                String visionMode, String facing,
+                int selfHp, int selfMaxHp) {
+            this.visionMode = visionMode;
+            this.selfFacing = facing;
+            this.selfHp = selfHp;
+            this.selfMaxHp = selfMaxHp;
+            return this;
+        }
+
+        /** v2：巡视状态与目标。 */
+        public AgentEventBuilder patrol(
+                String mode, Position target, int selectionOrdinal) {
+            this.patrolMode = mode;
+            if (target != null) {
+                this.patrolTargetX = target.x;
+                this.patrolTargetY = target.y;
+            }
+            this.selectionOrdinal = selectionOrdinal;
+            return this;
+        }
+
+        /** v2：动作执行前后朝向。 */
+        public AgentEventBuilder facingChange(
+                String beforeFacing, String afterFacing) {
+            this.beforeFacing = beforeFacing;
+            this.afterFacing = afterFacing;
             return this;
         }
 
@@ -493,7 +579,7 @@ public final class AgentTrace {
 
     /**
      * 按到达顺序把事件保存在内存中的 Sink。
-     * Phase 0 的 Harness 使用它生成 trace；List 的 append 顺序同时定义 canonical
+     * 早期 Harness 使用它生成 trace；List 的 append 顺序同时定义 canonical
      * sequence，因此这里不能改用无顺序集合。
      */
     public static final class InMemorySink implements Sink {
@@ -526,7 +612,7 @@ public final class AgentTrace {
             for (int i = 0; i < events.size(); i++) {
                 TraceEvent e = events.get(i);
                 sb.append("  {");
-                if (AGENT_SCHEMA_VERSION.equals(e.schemaVersion)) {
+                if (AGENT_RUNTIME_TRACE_VERSION.equals(e.schemaVersion)) {
                     appendAgentEvent(sb, e, i);
                     sb.append("}");
                     if (i < events.size() - 1) {
@@ -553,9 +639,10 @@ public final class AgentTrace {
                 appendNullableInt(sb, "beforeX", e.beforeX, false);
                 appendNullableInt(sb, "beforeY", e.beforeY, false);
                 appendNullableInt(sb, "afterX", e.afterX, false);
-                boolean phase0Schema = PHASE0_SCHEMA_VERSION.equals(e.schemaVersion);
-                appendNullableInt(sb, "afterY", e.afterY, phase0Schema);
-                if (!phase0Schema) {
+                boolean legacySchema = LEGACY_DECISION_TRACE_VERSION
+                        .equals(e.schemaVersion);
+                appendNullableInt(sb, "afterY", e.afterY, legacySchema);
+                if (!legacySchema) {
                     appendNullableBoolean(sb, "visiblePlayer", e.visiblePlayer, false);
                     appendNullableInt(sb, "visibleEntityCount", e.visibleEntityCount, false);
                     appendNullableInt(sb, "fovTileCount", e.fovTileCount, true);
@@ -605,7 +692,19 @@ public final class AgentTrace {
                     sb, "visiblePlayer", e.visiblePlayer, false);
             appendNullableInt(
                     sb, "visibleEntityCount", e.visibleEntityCount, false);
-            appendNullableInt(sb, "fovTileCount", e.fovTileCount, true);
+            appendNullableInt(sb, "fovTileCount", e.fovTileCount, false);
+            appendNullableStr(sb, "worldId", e.worldId, false);
+            appendNullableStr(sb, "visionMode", e.visionMode, false);
+            appendNullableStr(sb, "selfFacing", e.selfFacing, false);
+            appendNullableInt(sb, "selfHp", e.selfHp, false);
+            appendNullableInt(sb, "selfMaxHp", e.selfMaxHp, false);
+            appendNullableStr(sb, "patrolMode", e.patrolMode, false);
+            appendNullableInt(sb, "patrolTargetX", e.patrolTargetX, false);
+            appendNullableInt(sb, "patrolTargetY", e.patrolTargetY, false);
+            appendNullableInt(
+                    sb, "selectionOrdinal", e.selectionOrdinal, false);
+            appendNullableStr(sb, "beforeFacing", e.beforeFacing, false);
+            appendNullableStr(sb, "afterFacing", e.afterFacing, true);
         }
 
         private void appendField(StringBuilder sb, String key, String value, boolean last) {

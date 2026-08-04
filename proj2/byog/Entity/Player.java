@@ -8,6 +8,7 @@ import byog.lab5.Position;
 
 public class Player extends Entity {
     private int hp;
+    private int maxHp;
     private int sightRange;
     private int attackDamage = 15;
     private int damageVariance = 5;
@@ -29,6 +30,7 @@ public class Player extends Entity {
     public Player(Position position, int hp, int sightRange) {
         super(position, Tileset.PLAYER);
         this.hp = hp;
+        this.maxHp = hp;
         this.sightRange = sightRange;
     }
 
@@ -36,6 +38,7 @@ public class Player extends Entity {
     public Player(Position position, GameConfig config) {
         super(position, Tileset.PLAYER);
         this.hp = config.playerHp;
+        this.maxHp = config.playerHp;
         this.sightRange = 10;
         this.attackDamage = config.playerAttack;
         this.damageVariance = config.playerDamageVariance;
@@ -47,8 +50,21 @@ public class Player extends Entity {
         return hp;
     }
 
+    /** 当前难度配置的生命上限；本阶段不参与永久成长。 */
+    public int getMaxHp() {
+        return maxHp;
+    }
+
+    /** 设置当前生命值并收敛到 [0, maxHp]。 */
     public void setHp(int hp) {
-        this.hp = hp;
+        this.hp = Math.max(0, Math.min(maxHp, hp));
+    }
+
+    /** 治疗：恢复生命但不超过生命上限。amount 为负或零时无效果。 */
+    public void heal(int amount) {
+        if (amount > 0) {
+            this.hp = Math.min(maxHp, hp + amount);
+        }
     }
 
     public int getSightRange() {
@@ -98,6 +114,11 @@ public class Player extends Entity {
 
     public int getCharge() {
         return charge;
+    }
+
+    /** 读档时恢复当前蓄力，收敛到 [0, maxCharge]。换层不调用此入口。 */
+    public void restoreCharge(int charge) {
+        this.charge = Math.max(0, Math.min(maxCharge, charge));
     }
 
     public int getMaxCharge() {

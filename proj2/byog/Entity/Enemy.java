@@ -3,6 +3,10 @@ package byog.Entity;
 import byog.Action.Action;
 import byog.Action.ActionOutcome;
 import byog.Action.ActionQueue;
+import byog.Action.AttackAction;
+import byog.Action.MoveAction;
+import byog.Action.TurnAction;
+import byog.Action.WaitAction;
 import byog.AI.AiTickContext;
 import byog.AI.BFSPathfinder;
 import byog.AI.ClassicalPlanner;
@@ -11,6 +15,8 @@ import byog.AI.EnemyBrain;
 import byog.AI.GameStateSnapshot;
 import byog.AI.IntentArbiter;
 import byog.AI.IntentLease;
+import byog.AI.PatrolController;
+import byog.AI.PatrolState;
 import byog.AI.ReflexController;
 import byog.AI.ReflexObservation;
 import byog.AI.RuleBasedBrain;
@@ -19,11 +25,15 @@ import byog.Bridge.AgentHandler;
 import byog.Bridge.AgentProtocol;
 import byog.Bridge.AgentProtocolCodec;
 import byog.Bridge.AgentSession;
+import byog.Common.Direction;
+import byog.Common.Facing;
+import byog.Common.VisionMode;
 import byog.Helper.Logger;
 import byog.Helper.MathHelper;
 import byog.IO.GameConfig;
 import byog.Perception.ObservationEnvelope;
 import byog.Perception.PerceptionSystem;
+import byog.Perception.VisibleEntity;
 import byog.Trace.AgentTrace;
 import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
@@ -39,15 +49,25 @@ public class Enemy extends Entity {
     private ActionQueue actionQueue;
     private EnemyBrain brain;
     private int hp;
+    private int maxHp;
+    private Facing facing;
     private int sightRange;
     private Random random;
     private int moveInterval;
+    /** 独立攻击间隔（tick）；由 config.enemyAttackInterval 设置，默认与移动一致。 */
+    private int attackInterval;
+    /** 攻击冷却剩余 tick；不入存档，读档从 0 开始。 */
+    private int attackCooldownTicks;
     private int tickCounter;
     private StrategicIntent.Strategy currentStrategy;
     private int attackDamage;
     private int damageVariance;
     private boolean perceptionEnabled = false;
     private String agentId;
+    /** 所属命名世界的稳定身份；由 Game 在创建/读档时设置。 */
+    private String worldId;
+    /** 本敌人的视野模式；随世界存档保存。 */
+    private VisionMode visionMode = VisionMode.DIRECTIONAL;
     private long observationSeq = 0;
     /** 最近一次私有感知计算的可见性遮罩，perceptionEnabled=false 时为 null */
     private boolean[][] cachedVisibleMask;
@@ -74,6 +94,11 @@ public class Enemy extends Entity {
     private boolean lastReflexOverrideState;
     private long lastAgentRequestTick;
     private long lastSessionLifecycleSequence;
+    /** 可保存的确定性巡视状态；换层重置、读档恢复。 */
+    private final PatrolState patrolState;
+    private final PatrolController patrolController;
+    /** 巡视目标选择的世界 seed 派生；由 Game 设置。 */
+    private long patrolSeedKey;
 
     public Enemy(Position position, TETile tile, int hp, int sightRange,
                  int moveInterval, int attackDamage, int damageVariance,
@@ -89,9 +114,16 @@ public class Enemy extends Entity {
                  Random random, String agentId,
                  int actionQueueLowWater, int actionQueueHighWater) {
         super(position, tile);
+        if (hp < 0) {
+            throw new IllegalArgumentException("hp must be >= 0");
+        }
         this.hp = hp;
+        this.maxHp = Math.max(hp, 1);
+        this.facing = Facing.NORTH;
         this.sightRange = sightRange;
         this.moveInterval = moveInterval;
+        this.attackInterval = moveInterval;
+        this.attackCooldownTicks = 0;
         this.attackDamage = attackDamage;
         this.damageVariance = damageVariance;
         this.tickCounter = 0;
@@ -110,6 +142,9 @@ public class Enemy extends Entity {
         this.lastReflexOverrideState = false;
         this.lastAgentRequestTick = Long.MIN_VALUE;
         this.lastSessionLifecycleSequence = -1;
+        this.patrolState = new PatrolState();
+        this.patrolController = new PatrolController();
+        this.patrolSeedKey = 0L;
     }
 
     /**
@@ -147,10 +182,10 @@ public class Enemy extends Entity {
                 int floorId = 1;
 
                 ObservationEnvelope observation = PerceptionSystem.computeObservation(
-                        runId, floorId, seq,
+                        worldId, runId, floorId, seq,
                         world, entityMgr,
                         this, player,
-                        this.sightRange, currentTurn);
+                        this.sightRange, visionMode, currentTurn);
 
                 if (traceContext != null) {
                     // ---- trace: 记录私有感知结果 ----
@@ -247,10 +282,10 @@ public class Enemy extends Entity {
             // 动作执行完成后，重新计算 FOV 以反映移动后的位置
             if (perceptionEnabled) {
                 ObservationEnvelope postObs = PerceptionSystem.computeObservation(
-                        "fov_update", 0, 0,
+                        worldId, "fov_update", 0, 0,
                         world, entityMgr,
                         this, player,
-                        this.sightRange, 0);
+                        this.sightRange, visionMode, 0);
                 this.cachedVisibleMask = postObs.getVisibleMask();
             }
         }
@@ -334,6 +369,9 @@ public class Enemy extends Entity {
 
         // 保持既有冷却语义：先累计 tick，再判断本轮是否允许行动。
         tickCounter++;
+        if (attackCooldownTicks > 0) {
+            attackCooldownTicks--;
+        }
         if (tickCounter < moveInterval) {
             return;
         }
@@ -416,6 +454,29 @@ public class Enemy extends Entity {
                 IntentLease lease = arbiter.getCurrentLease();
                 StrategicIntent leaseIntent = lease.getIntent();
 
+                if (leaseIntent.getStrategy()
+                        == StrategicIntent.Strategy.PATROL
+                        && lease.getDecisionSource()
+                        == AgentProtocol.DecisionSource.LOCAL_FALLBACK) {
+                    // 本地巡视 lease：由确定性巡视状态机持续驱动（移动/等待/转向），
+                    // 避免 self-target 冻结导致扫描被抑制。远程 PATROL lease 仍走
+                    // 原 planner 逻辑，使用 validator 补全的远程目标。
+                    PatrolController.PatrolDecision patrol =
+                            patrolController.decide(
+                                    latestObservation, patrolState,
+                                    patrolSeedKey, context.getFloorId(),
+                                    agentId);
+                    actionQueue.replaceWithBoundedPrefix(
+                            actionsForPatrol(patrol, world, entityMgr));
+                    queuedDecisionId = lease.getDecisionId();
+                    recordPatrolTrace(context, patrol);
+                    action = actionQueue.poll();
+                    source = lease.getDecisionSource();
+                    decisionId = lease.getDecisionId();
+                    selectDecision(decisionId, source);
+                    break;
+                }
+
                 if (!lease.getDecisionId().equals(queuedDecisionId)) {
                     currentStrategy = leaseIntent.getStrategy();
                     List<Action> actions = ClassicalPlanner.translateBounded(
@@ -437,8 +498,17 @@ public class Enemy extends Entity {
                 break;
             }
             case P4_LOCAL_FALLBACK: {
-                // Local Fallback：没有可用 Lease 时，由本地 Brain 创建并接管新计划。
-                StrategicIntent intent = brain.thinkFromObservation(latestObservation);
+                // Local Fallback：没有可用 Lease 时，由确定性巡视状态机接管。
+                // 玩家不可见（P1/P2 已处理可见情况），因此本地决策只做巡视。
+                PatrolController.PatrolDecision patrol =
+                        patrolController.decide(
+                                latestObservation, patrolState,
+                                patrolSeedKey, context.getFloorId(),
+                                agentId);
+                StrategicIntent intent = new StrategicIntent(
+                        StrategicIntent.Goal.PATROL,
+                        StrategicIntent.Strategy.PATROL,
+                        patrolTarget(patrol, getPosition()));
                 currentStrategy = intent.getStrategy();
                 startLocalDecision(context);
                 arbiter.adoptLocalFallbackLease(intent, currentDecisionId,
@@ -456,11 +526,11 @@ public class Enemy extends Entity {
                                         AgentProtocol.DecisionSource
                                                 .LOCAL_FALLBACK.name())
                                 .execution(decision.getLevel().name()));
-                List<Action> actions = ClassicalPlanner.translateBounded(
-                        intent, getPosition(), getId(), world,
-                        entityMgr, random, actionQueue.getHighWater());
-                actionQueue.replaceWithBoundedPrefix(actions);
+                actionQueue.replaceWithBoundedPrefix(
+                        actionsForPatrol(patrol, world, entityMgr));
                 queuedDecisionId = currentDecisionId;
+
+                recordPatrolTrace(context, patrol);
 
                 action = actionQueue.poll();
                 source = AgentProtocol.DecisionSource.LOCAL_FALLBACK;
@@ -475,8 +545,18 @@ public class Enemy extends Entity {
             return;
         }
 
+        // 独立攻击冷却：仲裁为攻击但冷却未到 → 降级为朝可见玩家移动（追击），
+        // 不原地等待。没有可见玩家时放弃本次行动。
+        if (action instanceof AttackAction && attackCooldownTicks > 0) {
+            action = chaseActionTowardsVisiblePlayer(entityMgr);
+            if (action == null) {
+                return;
+            }
+        }
+
         // 此处只执行并暂存原始结果；提交后的最终状态由 collectAgentUpdates 补全。
         Position before = copyPosition(getPosition());
+        String beforeFacing = facing == null ? null : facing.name();
         int actionIndex = actionsExecutedForDecision + 1;
         recordAgentEvent(context,
                 withSession(
@@ -489,11 +569,17 @@ public class Enemy extends Entity {
                                 .decision(decisionId, source.name())
                                 .override(overrideReason)
                                 .execution(decision.getLevel().name())
+                                .facingChange(beforeFacing,
+                                        facing == null ? null : facing.name())
                                 .action(actionIndex,
                                         action.getClass().getSimpleName(),
                                         null, before, null),
                         agentSession));
         Action.ActionResult result = action.execute(world, this);
+        if (action instanceof AttackAction) {
+            // 攻击成功后进入冷却；未命中（BLOCKED）也计入节奏。
+            attackCooldownTicks = attackInterval;
+        }
         actionsExecutedForDecision++;
         pendingAction = new PendingAction(
                 context.getRunId(), context.getFloorId(),
@@ -549,10 +635,10 @@ public class Enemy extends Entity {
         // 从已提交世界生成下一轮决策使用的私有观察及 Reflex Observation。
         ObservationEnvelope committedObservation =
                 PerceptionSystem.computeObservation(
-                        context.getRunId(), context.getFloorId(),
+                        worldId, context.getRunId(), context.getFloorId(),
                         getAndIncrementObservationSeq(),
                         world, entityMgr, this, player, sightRange,
-                        context.getLogicalTick());
+                        visionMode, context.getLogicalTick());
         latestObservation = committedObservation;
         latestReflexObservation = ReflexObservation.from(committedObservation);
         cachedVisibleMask = committedObservation.getVisibleMask();
@@ -570,7 +656,11 @@ public class Enemy extends Entity {
                                         committedObservation
                                                 .getVisibleEntities().size(),
                                         committedObservation
-                                                .getVisibleTiles().size()),
+                                                .getVisibleTiles().size())
+                                .world(worldId)
+                                .perception(visionMode.name(),
+                                        facing == null ? null : facing.name(),
+                                        hp, maxHp),
                         agentSession));
 
         ActionOutcome completedOutcome = null;
@@ -585,6 +675,7 @@ public class Enemy extends Entity {
                     pendingAction.overrideReason);
             lastActionOutcome = completedOutcome;
             pendingAction = null;
+            recordPatrolOutcome(completedOutcome);
             recordAgentEvent(context,
                     withSession(
                             AgentTrace.agentEvent(
@@ -920,6 +1011,134 @@ public class Enemy extends Entity {
     }
 
     /**
+     * 把巡视 MOVE primitive 转为 planner 目标；WAIT/TURN 使用自身位置，
+     * 保证本地 lease 被后续 P3 复用并交给 planner 时不会因 null target 崩溃。
+     */
+    private static Position patrolTarget(
+            PatrolController.PatrolDecision patrol, Position self) {
+        if (patrol.kind()
+                == PatrolController.PatrolDecision.Kind.MOVE
+                && patrol.moveDirection() != null) {
+            return new Position(
+                    self.x + patrol.moveDirection().dx,
+                    self.y + patrol.moveDirection().dy);
+        }
+        return self;
+    }
+
+    /**
+     * 把巡视 primitive 转换为具体动作：MOVE 经 planner 寻路，
+     * TURN 顺时针转 90°，WAIT 原地等待。P3/P4 共用，保证巡视状态机
+     * 在任何控制源下持续推进（转向不会被 self-target lease 冻结）。
+     */
+    private List<Action> actionsForPatrol(
+            PatrolController.PatrolDecision patrol,
+            TETile[][] world, EntityManager entityMgr) {
+        if (patrol.kind()
+                == PatrolController.PatrolDecision.Kind.MOVE) {
+            StrategicIntent intent = new StrategicIntent(
+                    StrategicIntent.Goal.PATROL,
+                    StrategicIntent.Strategy.PATROL,
+                    patrolTarget(patrol, getPosition()));
+            return ClassicalPlanner.translateBounded(
+                    intent, getPosition(), getId(), world,
+                    entityMgr, random, actionQueue.getHighWater());
+        }
+        if (patrol.kind()
+                == PatrolController.PatrolDecision.Kind.TURN) {
+            return List.of(new TurnAction(getFacing().clockwise()));
+        }
+        return List.of(new WaitAction());
+    }
+
+    /**
+     * 用已提交的移动结果推进巡视状态：成功移动清零受阻计数，
+     * 受阻移动增加计数（连续两次后控制器放弃目标）。
+     */
+    private void recordPatrolOutcome(ActionOutcome outcome) {
+        if (outcome == null) {
+            return;
+        }
+        boolean isMove = "MoveAction".equals(outcome.getActionType());
+        if (!isMove) {
+            return;
+        }
+        if (outcome.getResult() == Action.ActionResult.BLOCKED) {
+            patrolController.onMoveBlocked(patrolState);
+        } else if (outcome.getResult() == Action.ActionResult.SUCCESS) {
+            patrolController.onMoveSucceeded(patrolState);
+        }
+    }
+
+    /** 记录巡视状态机转换与目标选择的 v2 trace 事件。 */
+    private void recordPatrolTrace(
+            AiTickContext context,
+            PatrolController.PatrolDecision patrol) {
+        recordAgentEvent(context,
+                withSession(
+                        AgentTrace.agentEvent(
+                                AgentTrace.EventType.PATROL_STATE_CHANGED,
+                                context.getRunId(), context.getFloorId(),
+                                agentId, context.getLogicalTick())
+                                .observationSequence(
+                                        latestObservation.getObservationSeq())
+                                .patrol(patrolState.getMode().name(),
+                                        patrolState.getTarget(),
+                                        patrolState.getSelectionOrdinal()),
+                        agentSession));
+        if (patrol.transitionReason() != null
+                && patrol.transitionReason().startsWith("TARGET_SELECTED")) {
+            recordAgentEvent(context,
+                    withSession(
+                            AgentTrace.agentEvent(
+                                    AgentTrace.EventType
+                                            .PATROL_TARGET_SELECTED,
+                                    context.getRunId(),
+                                    context.getFloorId(), agentId,
+                                    context.getLogicalTick())
+                                    .observationSequence(
+                                            latestObservation
+                                                    .getObservationSeq())
+                                    .patrol(patrolState.getMode().name(),
+                                            patrolState.getTarget(),
+                                            patrolState
+                                                    .getSelectionOrdinal()),
+                            agentSession));
+        }
+    }
+
+    /**
+     * 攻击冷却期间的降级动作：朝最新可见玩家方向移动一步（追击）。
+     * 玩家不可见时返回 null。
+     */
+    private Action chaseActionTowardsVisiblePlayer(
+            EntityManager entityMgr) {
+        if (latestObservation == null) {
+            return null;
+        }
+        VisibleEntity player = latestObservation.getVisiblePlayer();
+        if (player == null) {
+            return null;
+        }
+        Position self = getPosition();
+        Position target = player.getPosition();
+        Direction direction = null;
+        if (target.x > self.x) {
+            direction = Direction.RIGHT;
+        } else if (target.x < self.x) {
+            direction = Direction.LEFT;
+        } else if (target.y > self.y) {
+            direction = Direction.UP;
+        } else if (target.y < self.y) {
+            direction = Direction.DOWN;
+        }
+        if (direction == null) {
+            return null; // 玩家与自身同格（不会发生）
+        }
+        return new MoveAction(direction, entityMgr);
+    }
+
+    /**
      * 通过权威 Java planner 将意图转换为至多一个待执行动作。
      */
     private Action planSingleAction(
@@ -1208,6 +1427,44 @@ public class Enemy extends Entity {
         return hp;
     }
 
+    /** 最大生命值；正数且不会因受伤改变。 */
+    public int getMaxHp() {
+        return maxHp;
+    }
+
+    /** 读档恢复最大生命值；要求为正，并把当前 HP 收敛到新上限。 */
+    public void setMaxHp(int maxHp) {
+        if (maxHp <= 0) {
+            throw new IllegalArgumentException("maxHp must be > 0");
+        }
+        this.maxHp = maxHp;
+        this.hp = Math.min(hp, maxHp);
+    }
+
+    /** 设置当前生命值并收敛到 [0, maxHp]。 */
+    public void setHp(int hp) {
+        this.hp = Math.max(0, Math.min(maxHp, hp));
+    }
+
+    public Facing getFacing() {
+        return facing;
+    }
+
+    public void setFacing(Facing facing) {
+        this.facing = Objects.requireNonNull(facing, "facing");
+    }
+
+    /**
+     * 用独立确定性随机流初始化生成朝向，不扰动其他随机序列。
+     * 读档时通过 {@link #setFacing(Facing)} 恢复保存值。
+     */
+    public void initializeFacing(String seed, int floorId) {
+        Random r = new Random((seed + "_F" + floorId
+                + "_facing_" + agentId).hashCode());
+        Facing[] values = Facing.values();
+        this.facing = values[r.nextInt(values.length)];
+    }
+
     /**
      * 安全记录 trace 事件。Sink 异常不得中断 AI 行为。
      * 当前 InMemorySink 不会主动抛异常，这是防御性保护。
@@ -1237,8 +1494,17 @@ public class Enemy extends Entity {
         return moveInterval;
     }
 
-    public void setHp(int hp) {
-        this.hp = hp;
+    /** 独立攻击间隔（tick）；必须为正。 */
+    public int getAttackInterval() {
+        return attackInterval;
+    }
+
+    public void setAttackInterval(int attackInterval) {
+        if (attackInterval <= 0) {
+            throw new IllegalArgumentException(
+                    "attackInterval must be > 0");
+        }
+        this.attackInterval = attackInterval;
     }
 
     public ActionQueue getActionQueue() {
@@ -1288,6 +1554,54 @@ public class Enemy extends Entity {
         return agentId;
     }
 
+    public String getWorldId() {
+        return worldId;
+    }
+
+    public void setWorldId(String worldId) {
+        this.worldId = worldId;
+    }
+
+    public VisionMode getVisionMode() {
+        return visionMode;
+    }
+
+    public void setVisionMode(VisionMode visionMode) {
+        this.visionMode = Objects.requireNonNull(visionMode, "visionMode");
+    }
+
+    /** 当前巡视状态（可保存；读档原样恢复）。 */
+    public PatrolState getPatrolState() {
+        return patrolState;
+    }
+
+    /** 读档恢复巡视状态；null 时保留初始空状态。 */
+    public void setPatrolState(PatrolState patrolState) {
+        if (patrolState == null) {
+            return;
+        }
+        this.patrolState.setMode(patrolState.getMode());
+        this.patrolState.setTarget(patrolState.getTarget());
+        this.patrolState.setDwellActionsRemaining(
+                patrolState.getDwellActionsRemaining());
+        this.patrolState.setScanTurnsRemaining(
+                patrolState.getScanTurnsRemaining());
+        this.patrolState.setBlockedAttempts(
+                patrolState.getBlockedAttempts());
+        this.patrolState.setSelectionOrdinal(
+                patrolState.getSelectionOrdinal());
+    }
+
+    /** 设置巡视选择使用的世界 seed 派生；由 Game 在创建/读档时提供。 */
+    public void setPatrolSeedKey(long patrolSeedKey) {
+        this.patrolSeedKey = patrolSeedKey;
+    }
+
+    /** 换层时重置巡视状态。 */
+    public void resetPatrolState() {
+        this.patrolState.reset();
+    }
+
     public long getAndIncrementObservationSeq() {
         return observationSeq++;
     }
@@ -1311,7 +1625,8 @@ public class Enemy extends Entity {
      * @return 生成的敌人列表
      */
     public static List<Enemy> spawnEnemies(TETile[][] world, String seed,
-            Position playerPos, int extraCount, GameConfig config) {
+            Position playerPos, int extraCount, int floorId,
+            GameConfig config) {
         List<Enemy> enemies = new ArrayList<>();
         Random countRandom = new Random((seed + "_enemy_count").hashCode());
         int count = config.enemyBaseCount + extraCount + countRandom.nextInt(3);
@@ -1325,6 +1640,8 @@ public class Enemy extends Entity {
                     config.agentActionQueueLowWater,
                     config.agentActionQueueHighWater);
             enemy.setPerceptionEnabled(true);   // 游戏运行时，默认开启感知模式
+            enemy.initializeFacing(seed, floorId);
+            enemy.setAttackInterval(config.enemyAttackInterval);
             Entity.initEntity(enemy, world, seed + "_pos_" + i);
 
             int retryCount = 0;

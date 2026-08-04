@@ -9,8 +9,8 @@ from typing import Any
 
 
 # Compatibility value locked by the existing Java wire contract.
-ENVELOPE_VERSION = "phase2.session.v1"
-OBSERVATION_VERSION = "private-observation.v1"
+ENVELOPE_VERSION = "agent-session.v1"
+OBSERVATION_VERSION = "private-observation.v2"
 INTENT_VERSION = "strategic-intent.v1"
 
 DEFAULT_MAX_FRAME_BYTES = 65_536
@@ -29,6 +29,8 @@ MESSAGE_TYPES = frozenset(
     }
 )
 SKILLS = frozenset({"PATROL", "CHASE", "ATTACK", "GUARD"})
+FACINGS = frozenset({"NORTH", "EAST", "SOUTH", "WEST"})
+VISION_MODES = frozenset({"DIRECTIONAL", "OMNIDIRECTIONAL"})
 WORLD_EVENT_TYPES = frozenset(
     {
         "PLAN_BLOCKED",
@@ -39,11 +41,19 @@ WORLD_EVENT_TYPES = frozenset(
     }
 )
 DECISION_SOURCES = frozenset({"REMOTE_AGENT", "LOCAL_FALLBACK"})
+TILE_TYPES = frozenset(
+    {
+        "FLOOR", "WALL", "STAIRS", "NOTHING", "GRASS", "WATER",
+        "FLOWER", "LOCKED_DOOR", "UNLOCKED_DOOR", "SAND", "MOUNTAIN",
+        "TREE", "UNKNOWN",
+    }
+)
 
 _ENVELOPE_FIELDS = (
     "schemaVersion",
     "messageId",
     "messageSeq",
+    "worldId",
     "runId",
     "floorId",
     "agentId",
@@ -162,6 +172,7 @@ def validate_envelope(value: Any) -> dict[str, Any]:
         "schemaVersion": schema_version,
         "messageId": _string(envelope, "messageId"),
         "messageSeq": _integer(envelope, "messageSeq", bits=64),
+        "worldId": _string(envelope, "worldId"),
         "runId": _string(envelope, "runId"),
         "floorId": _integer(envelope, "floorId", bits=32),
         "agentId": _string(envelope, "agentId"),
@@ -195,6 +206,7 @@ def _observation(value: Any) -> dict[str, Any]:
         "observationSeq",
         "requestGeneration",
         "observedAtTurn",
+        "visionMode",
         "self",
         "visibleTiles",
         "visibleEntities",
@@ -209,8 +221,21 @@ def _observation(value: Any) -> dict[str, Any]:
             "UNKNOWN_PAYLOAD_VERSION",
             f"observationVersion: {observation_version}",
         )
+    vision_mode = _string(data, "visionMode")
+    if vision_mode not in VISION_MODES:
+        raise ProtocolViolation(
+            "UNKNOWN_FIELD", f"visionMode: {vision_mode}"
+        )
     self_data = _object(data["self"], "observation.self")
-    _exact_fields(self_data, ("position", "hp"), "observation.self")
+    _exact_fields(
+        self_data, ("position", "hp", "maxHp", "facing"),
+        "observation.self",
+    )
+    facing = _string(self_data, "facing")
+    if facing not in FACINGS:
+        raise ProtocolViolation(
+            "UNKNOWN_FIELD", f"self.facing: {facing}"
+        )
     return {
         "observationVersion": observation_version,
         "decisionId": _string(data, "decisionId"),
@@ -219,9 +244,12 @@ def _observation(value: Any) -> dict[str, Any]:
             data, "requestGeneration", bits=64
         ),
         "observedAtTurn": _integer(data, "observedAtTurn", bits=64),
+        "visionMode": vision_mode,
         "self": {
             "position": _position(self_data["position"], "self.position"),
             "hp": _integer(self_data, "hp", bits=32),
+            "maxHp": _integer(self_data, "maxHp", bits=32),
+            "facing": facing,
         },
         "visibleTiles": _visible_tiles(data["visibleTiles"]),
         "visibleEntities": _visible_entities(data["visibleEntities"]),
@@ -439,11 +467,16 @@ def _visible_tiles(value: Any) -> list[dict[str, Any]]:
         tile = _object(item, f"visibleTiles[{index}]")
         fields = ("x", "y", "type", "walkable")
         _exact_fields(tile, fields, f"visibleTiles[{index}]")
+        tile_type = _string(tile, "type")
+        if tile_type not in TILE_TYPES:
+            raise ProtocolViolation(
+                "UNKNOWN_FIELD", f"visibleTiles[{index}].type: {tile_type}"
+            )
         result.append(
             {
                 "x": _integer(tile, "x", bits=32),
                 "y": _integer(tile, "y", bits=32),
-                "type": _string(tile, "type"),
+                "type": tile_type,
                 "walkable": _boolean(tile, "walkable"),
             }
         )

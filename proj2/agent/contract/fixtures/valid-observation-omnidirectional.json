@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "agent-session.v1",
+  "messageId": "fixture-message-2",
+  "messageSeq": 2,
+  "worldId": "world-fixture",
+  "runId": "run-fixture",
+  "floorId": 1,
+  "agentId": "guard-a",
+  "sessionEpoch": 1,
+  "logicalTick": 43,
+  "type": "observation",
+  "data": {
+    "observationVersion": "private-observation.v2",
+    "decisionId": "guard-a-decision-5",
+    "observationSeq": 8,
+    "requestGeneration": 2,
+    "observedAtTurn": 43,
+    "visionMode": "OMNIDIRECTIONAL",
+    "self": {
+      "position": {"x": 3, "y": 3},
+      "hp": 20,
+      "maxHp": 20,
+      "facing": "NORTH"
+    },
+    "visibleTiles": [],
+    "visibleEntities": [],
+    "heardEvents": [],
+    "pendingEvents": [],
+    "capabilities": {
+      "supportedSkills": ["PATROL", "CHASE", "ATTACK", "GUARD"],
+      "sightRange": 7,
+      "attackDamage": 10,
+      "moveInterval": 5
+    }
+  }
+}

@@ -21,6 +21,26 @@ import static org.junit.Assert.assertTrue;
 public class GameConfigTest {
 
     @Test
+    public void enemyAttackIntervalIsUnifiedAndFallbackSafe() {
+        // 攻击间隔按产品要求三难度统一（enemy.attackInterval=5）；
+        // 移动速率与视野由配置决定，不锁死具体值（用户可调）。
+        for (Difficulty difficulty : Difficulty.values()) {
+            GameConfig config = new GameConfig(difficulty);
+            assertEquals(
+                    "attackInterval must be unified for " + difficulty,
+                    5, config.enemyAttackInterval);
+            assertTrue("moveInterval must be positive for " + difficulty,
+                    config.enemyMoveInterval > 0);
+            assertTrue("sightRange must be positive for " + difficulty,
+                    config.enemySightRange > 0);
+        }
+        // 缺失 key 时回退安全默认
+        GameConfig missing = new GameConfig(
+                Difficulty.BALANCED, new Properties());
+        assertEquals(5, missing.enemyAttackInterval);
+    }
+
+    @Test
     public void missingAgentPropertiesUseSafeDefaults() {
         GameConfig config = new GameConfig(
                 Difficulty.BALANCED, new Properties());
@@ -74,7 +94,7 @@ public class GameConfigTest {
 
         List<Enemy> enemies = Enemy.spawnEnemies(
                 openWorld(24, 16), "config-contract",
-                new Position(12, 8), 0, config);
+                new Position(12, 8), 0, 1, config);
         assertFalse(enemies.isEmpty());
         for (Enemy enemy : enemies) {
             assertEquals(1, enemy.getActionQueue().getLowWater());

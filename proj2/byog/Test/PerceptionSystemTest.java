@@ -141,11 +141,11 @@ public class PerceptionSystemTest {
 
     @Test
     public void testObservationDefensivelyCopiesMutableData() {
-        Phase1EncounterHarness harness = Phase1EncounterHarness.baselineTwoGuardsV1();
+        PrivatePerceptionEncounterHarness harness = PrivatePerceptionEncounterHarness.baselineTwoGuardsV1();
         ObservationEnvelope observation = PerceptionSystem.computeObservation(
-                "immutability", 1, 0,
+                "world-test", "immutability", 1, 0,
                 harness.getWorld(), harness.getEntityMgr(),
-                harness.guardA(), harness.player(), 7, 0);
+                harness.guardA(), harness.player(), 7, byog.Common.VisionMode.DIRECTIONAL, 0);
 
         Position originalSelf = harness.guardA().getPosition();
         Position exposedSelf = observation.getSelfPosition();
@@ -168,12 +168,12 @@ public class PerceptionSystemTest {
 
     @Test
     public void testObservationWalkabilityIsSnapshot() {
-        Phase1EncounterHarness harness = Phase1EncounterHarness.baselineTwoGuardsV1();
+        PrivatePerceptionEncounterHarness harness = PrivatePerceptionEncounterHarness.baselineTwoGuardsV1();
         Position self = harness.guardA().getPosition();
         ObservationEnvelope observation = PerceptionSystem.computeObservation(
-                "snapshot", 1, 0,
+                "world-test", "snapshot", 1, 0,
                 harness.getWorld(), harness.getEntityMgr(),
-                harness.guardA(), harness.player(), 7, 0);
+                harness.guardA(), harness.player(), 7, byog.Common.VisionMode.DIRECTIONAL, 0);
 
         assertTrue(observation.isWalkable(self.x, self.y));
         harness.getWorld()[self.x][self.y] = Tileset.WALL;

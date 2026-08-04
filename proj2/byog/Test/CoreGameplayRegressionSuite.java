@@ -1,5 +1,6 @@
 package byog.Test;
 
+import byog.Bridge.AgentContractFixtureTest;
 import byog.Helper.Logger;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -13,20 +14,28 @@ import org.junit.runners.Suite;
 @RunWith(Suite.class)
 @Suite.SuiteClasses({
     EnemyCollisionTest.class,
-    Phase0EncounterTest.class,
+    LegacyEncounterTest.class,
     PerceptionSystemTest.class,
-    Phase1EncounterTest.class,
-    Phase2ProtocolTest.class,
-    Phase2AiTickTest.class,
-    Phase2ArbiterTest.class,
+    PrivatePerceptionEncounterTest.class,
+    AgentProtocolContractTest.class,
+    AgentAiTickTest.class,
+    AgentArbiterTest.class,
     AgentSessionTest.class,
     AgentTraceContractTest.class,
-    GameConfigTest.class
+    GameConfigTest.class,
+    PlayerRunStateTest.class,
+    HealthPackTest.class,
+    WorldSaveRepositoryTest.class,
+    FacingActionTest.class,
+    DirectionalFovTest.class,
+    PatrolControllerTest.class,
+    BottomBarUiTest.class,
+    AgentContractFixtureTest.class
 })
-public final class Phase2TestSuite {
+public final class CoreGameplayRegressionSuite {
     private static Logger.Level previousLogLevel;
 
-    private Phase2TestSuite() {
+    private CoreGameplayRegressionSuite() {
     }
 
     @BeforeClass

@@ -156,6 +156,7 @@ class ProtocolCodecTest(unittest.TestCase):
             "schemaVersion": ENVELOPE_VERSION,
             "messageId": f"java-{message_type}",
             "messageSeq": 0,
+            "worldId": "world-test",
             "runId": "smoke-run",
             "floorId": 1,
             "agentId": "guard-a",

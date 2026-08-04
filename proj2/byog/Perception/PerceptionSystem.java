@@ -1,5 +1,7 @@
 package byog.Perception;
 
+import byog.Common.Facing;
+import byog.Common.VisionMode;
 import byog.Entity.Enemy;
 import byog.Entity.Entity;
 import byog.Entity.EntityManager;
@@ -73,15 +75,21 @@ public final class PerceptionSystem {
 
     /**
      * 计算单个敌人的私有感知结果。
+     *
+     * <p>计算顺序固定为：曼哈顿菱形 → 视野模式/朝向半边 → LOS → 可见 tile/实体快照。
+     * 必须先完成 mask 再收集可见实体，避免背后玩家先进入 visibleEntities 再被裁掉。</p>
+     *
+     * @param worldId 当前命名世界的稳定身份
      * @param runId 本次游戏运行的 ID
      * @param floorId 当前楼层
      * @param observationSeq 此敌人的 observation 序号
+     * @param visionMode DIRECTIONAL 只保留面朝方向的半边菱形；OMNIDIRECTIONAL 保留原全向菱形
      */
     public static ObservationEnvelope computeObservation(
-            String runId, int floorId, long observationSeq,
+            String worldId, String runId, int floorId, long observationSeq,
             TETile[][] world, EntityManager entityMgr,
             Enemy self, Player player,
-            int sightRange, long currentTurn) {
+            int sightRange, VisionMode visionMode, long currentTurn) {
 
         Position selfPos = self.getPosition();
         int selfX = selfPos.x;
@@ -91,14 +99,19 @@ public final class PerceptionSystem {
         List<VisibleEntity> visibleEntities = new ArrayList<>();
         List<HeardEvent> heardEvents = new ArrayList<>();
 
-        // 第一步：FOV 计算。遍历 sightRange 内所有 tile，用射线检测可见性
+        // 第一步：范围 → 模式/朝向半边 → LOS。
         for (int x = 0; x < world.length; x++) {
             for (int y = 0; y < world[0].length; y++) {
                 int dist = Math.abs(x - selfX) + Math.abs(y - selfY);
-                if (dist <= sightRange) {
-                    if (hasLineOfSight(world, selfX, selfY, x, y)) {
-                        visibleMask[x][y] = true;
-                    }
+                if (dist > sightRange) {
+                    continue;
+                }
+                if (visionMode == VisionMode.DIRECTIONAL
+                        && !allowedByFacing(selfPos, self.getFacing(), x, y)) {
+                    continue;
+                }
+                if (hasLineOfSight(world, selfX, selfY, x, y)) {
+                    visibleMask[x][y] = true;
                 }
             }
         }
@@ -146,12 +159,29 @@ public final class PerceptionSystem {
             }
         }
 
-        // 第四步：构造不可变的 ObservationEnvelope 返回，传入 world 引用供 isWalkable 查询
-        return new ObservationEnvelope(runId, floorId, self.getAgentId(),
-                observationSeq, currentTurn,
-                selfPos, self.getHp(),
+        // 第四步：构造不可变的 ObservationEnvelope 返回
+        return new ObservationEnvelope(worldId, runId, floorId,
+                self.getAgentId(), observationSeq, currentTurn,
+                selfPos, self.getHp(), self.getMaxHp(),
+                self.getFacing(), visionMode,
                 visibleMask, visibleEntities, heardEvents,
-                visibleTiles,
-                world);
+                visibleTiles, world);
+    }
+
+    /**
+     * 半边过滤：只保留面朝方向的半菱形（含穿过 self 的切分中线）。
+     * 中线使用 &gt;=/&lt;= 保证可见；自身格始终可见。
+     */
+    private static boolean allowedByFacing(
+            Position self, Facing facing, int x, int y) {
+        if (x == self.x && y == self.y) {
+            return true;
+        }
+        return switch (facing) {
+            case NORTH -> y >= self.y;
+            case SOUTH -> y <= self.y;
+            case EAST -> x >= self.x;
+            case WEST -> x <= self.x;
+        };
     }
 }

@@ -84,6 +84,7 @@ class DeterministicAgent:
                 "schemaVersion": ENVELOPE_VERSION,
                 "messageId": f"runtime-message-{message_seq}",
                 "messageSeq": message_seq,
+                "worldId": request["worldId"],
                 "runId": request["runId"],
                 "floorId": request["floorId"],
                 "agentId": request["agentId"],

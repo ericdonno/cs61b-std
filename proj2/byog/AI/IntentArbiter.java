@@ -7,7 +7,7 @@ import byog.Helper.Logger;
 import java.util.Objects;
 
 /**
- * P0-P4 仲裁者。按固定优先级决定谁控制当前 action tick。
+ * 分优先级仲裁者。按固定优先级决定谁控制当前 action tick。
  *
  * <p>优先级：P0(Java 安全) > P1(相邻攻击) > P2(可见接战) > P3(远程 lease) > P4(本地 fallback)。
  * 管理反射覆盖生命周期（暂挂/恢复 lease）和远程 lease 的安全采纳。</p>
@@ -57,7 +57,7 @@ public final class IntentArbiter {
     }
 
     /**
-     * 评估 P0-P4 并返回当前 action tick 的控制级别。
+     * 评估仲裁优先级 并返回当前 action tick 的控制级别。
      * 同时管理反射覆盖的 begin/end 和 lease 状态转换。
      *
      * @param reflex      当前私有感知切片

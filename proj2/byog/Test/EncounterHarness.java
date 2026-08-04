@@ -27,17 +27,17 @@ import java.util.Random;
 public final class EncounterHarness {
     public enum Mode {
         LEGACY(
-                AgentTrace.PHASE0_SCHEMA_VERSION,
+                AgentTrace.LEGACY_DECISION_TRACE_VERSION,
                 "baseline-two-guards",
                 false,
                 false),
         PRIVATE_PERCEPTION(
-                AgentTrace.SCHEMA_VERSION,
+                AgentTrace.PRIVATE_PERCEPTION_TRACE_VERSION,
                 "baseline-two-guards-perception",
                 true,
                 false),
         AGENT_BRIDGE(
-                AgentTrace.AGENT_SCHEMA_VERSION,
+                AgentTrace.AGENT_RUNTIME_TRACE_VERSION,
                 "agent-two-guards",
                 true,
                 true);
@@ -305,6 +305,7 @@ public final class EncounterHarness {
                 AgentProtocol.ENVELOPE_VERSION,
                 stableAgentId + "-inbound-" + sequence,
                 sequence,
+                request.worldId,
                 request.runId,
                 request.floorId,
                 request.agentId,
@@ -417,7 +418,7 @@ public final class EncounterHarness {
                 .heartbeatTicks(20)
                 .build();
         AgentProtocol.Identity identity = new AgentProtocol.Identity(
-                RUN_ID, FLOOR_ID, enemy.getAgentId(), 0, 0);
+                "world-test", RUN_ID, FLOOR_ID, enemy.getAgentId(), 0, 0);
         return new AgentSession(
                 config, identity, clock,
                 new IdGenerator.DeterministicIdGenerator(

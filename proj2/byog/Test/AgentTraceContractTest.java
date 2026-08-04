@@ -133,7 +133,7 @@ public class AgentTraceContractTest {
             String agentTrace = agent.canonicalTrace();
             assertTrue(agentTrace.contains(
                     "\"schemaVersion\":\""
-                            + AgentTrace.AGENT_SCHEMA_VERSION + "\""));
+                            + AgentTrace.AGENT_RUNTIME_TRACE_VERSION + "\""));
             assertTrue(agentTrace.contains("\"runId\""));
             assertFalse(agentTrace.contains("wallClockTimestamp"));
             assertFalse(agentTrace.contains("threadName"));

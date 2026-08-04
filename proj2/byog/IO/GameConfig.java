@@ -30,8 +30,12 @@ public class GameConfig {
     public final int enemyAttack;
     public final int enemyDamageVariance;
     public final int enemyMoveInterval;
+    public final int enemyAttackInterval;
     public final int enemySightRange;
     public final int enemyBaseCount;
+    public final int healthPackMinCount;
+    public final int healthPackMaxCount;
+    public final int healthPackHealAmount;
     public final boolean debugShowEnemyFov;
     public final boolean agentBridgeEnabled;
     public final String agentBridgeHost;
@@ -69,9 +73,28 @@ public class GameConfig {
         enemyHp = getInt(props, prefix + "enemy.hp", 20);
         enemyAttack = getInt(props, prefix + "enemy.attack", 10);
         enemyDamageVariance = getInt(props, prefix + "enemy.damageVariance", 3);
-        enemyMoveInterval = getInt(props, prefix + "enemy.moveInterval", 5);
-        enemySightRange = getInt(props, prefix + "enemy.sightRange", 7);
+        enemyMoveInterval = getInt(props, prefix + "enemy.moveInterval", 3);
+        enemyAttackInterval = getIntAtLeast(
+                props, prefix + "enemy.attackInterval", 5, 1);
+        enemySightRange = getInt(props, prefix + "enemy.sightRange", 10);
         enemyBaseCount = getInt(props, prefix + "enemy.baseCount", 3);
+        int hpMin = getIntAtLeast(
+                props, prefix + "healthPack.minCount", 2, 0);
+        int hpHeal = getIntAtLeast(
+                props, prefix + "healthPack.healAmount", 20, 1);
+        int hpMax = getIntAtLeast(
+                props, prefix + "healthPack.maxCount", 4, 0);
+        if (hpMax < hpMin) {
+            logInvalidRelation(
+                    prefix + "healthPack.minCount", hpMin,
+                    prefix + "healthPack.maxCount", hpMax,
+                    2, 4);
+            hpMin = 2;
+            hpMax = 4;
+        }
+        healthPackMinCount = hpMin;
+        healthPackMaxCount = hpMax;
+        healthPackHealAmount = hpHeal;
         debugShowEnemyFov = getBoolean(props, "debug.showEnemyFov", false);
 
         agentBridgeEnabled = getBoolean(
@@ -329,9 +352,13 @@ public class GameConfig {
             writer.write("easy.enemy.hp=15\n");
             writer.write("easy.enemy.attack=5\n");
             writer.write("easy.enemy.damageVariance=2\n");
-            writer.write("easy.enemy.moveInterval=10\n");
-            writer.write("easy.enemy.sightRange=5\n");
+            writer.write("easy.enemy.moveInterval=3\n");
+            writer.write("easy.enemy.attackInterval=5\n");
+            writer.write("easy.enemy.sightRange=10\n");
             writer.write("easy.enemy.baseCount=2\n");
+            writer.write("easy.healthPack.minCount=3\n");
+            writer.write("easy.healthPack.maxCount=5\n");
+            writer.write("easy.healthPack.healAmount=25\n");
             writer.write("\n");
             writer.write("# ========== Balanced ==========\n");
             writer.write("balanced.player.hp=100\n");
@@ -342,9 +369,13 @@ public class GameConfig {
             writer.write("balanced.enemy.hp=20\n");
             writer.write("balanced.enemy.attack=10\n");
             writer.write("balanced.enemy.damageVariance=3\n");
-            writer.write("balanced.enemy.moveInterval=5\n");
-            writer.write("balanced.enemy.sightRange=7\n");
+            writer.write("balanced.enemy.moveInterval=3\n");
+            writer.write("balanced.enemy.attackInterval=5\n");
+            writer.write("balanced.enemy.sightRange=10\n");
             writer.write("balanced.enemy.baseCount=3\n");
+            writer.write("balanced.healthPack.minCount=2\n");
+            writer.write("balanced.healthPack.maxCount=4\n");
+            writer.write("balanced.healthPack.healAmount=20\n");
             writer.write("\n");
             writer.write("# ========== Hardcore ==========\n");
             writer.write("hardcore.player.hp=50\n");
@@ -356,8 +387,12 @@ public class GameConfig {
             writer.write("hardcore.enemy.attack=15\n");
             writer.write("hardcore.enemy.damageVariance=5\n");
             writer.write("hardcore.enemy.moveInterval=3\n");
-            writer.write("hardcore.enemy.sightRange=9\n");
+            writer.write("hardcore.enemy.attackInterval=5\n");
+            writer.write("hardcore.enemy.sightRange=10\n");
             writer.write("hardcore.enemy.baseCount=4\n");
+            writer.write("hardcore.healthPack.minCount=1\n");
+            writer.write("hardcore.healthPack.maxCount=3\n");
+            writer.write("hardcore.healthPack.healAmount=15\n");
             writer.write("\n");
             writer.write("# ========== Debug ==========\n");
             writer.write("debug.showEnemyFov=false\n");

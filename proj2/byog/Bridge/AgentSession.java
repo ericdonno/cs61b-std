@@ -336,6 +336,7 @@ public final class AgentSession implements AutoCloseable {
     }
 
     private final AgentSessionConfig config;
+    private final String worldId;
     private final String runId;
     private final int floorId;
     private final String agentId;
@@ -393,6 +394,7 @@ public final class AgentSession implements AutoCloseable {
         this.clock = Objects.requireNonNull(clock, "clock");
         this.idGenerator = Objects.requireNonNull(idGenerator, "idGenerator");
         this.transport = Objects.requireNonNull(transport, "transport");
+        worldId = requireNonBlank(identity.worldId, "worldId");
         runId = requireNonBlank(identity.runId, "runId");
         if (identity.floorId < 1) {
             throw new IllegalArgumentException("floorId must be at least 1");
@@ -805,6 +807,7 @@ public final class AgentSession implements AutoCloseable {
                             queued.schemaVersion,
                             queued.messageId,
                             queued.messageSeq,
+                            queued.worldId,
                             queued.runId,
                             queued.floorId,
                             queued.agentId,
@@ -1323,6 +1326,7 @@ public final class AgentSession implements AutoCloseable {
                 AgentProtocol.ENVELOPE_VERSION,
                 idGenerator.newMessageId(),
                 nextOutboundMessageSeq++,
+                worldId,
                 runId,
                 floorId,
                 agentId,
@@ -1363,9 +1367,13 @@ public final class AgentSession implements AutoCloseable {
                 observation.getObservationSeq(),
                 request.getRequestGeneration(),
                 observation.getObservedAtTurn(),
+                observation.getVisionMode().name(),
                 new AgentProtocol.SelfData(
                         toPositionData(observation.getSelfPosition()),
-                        observation.getSelfHp()),
+                        observation.getSelfHp(),
+                        observation.getSelfMaxHp(),
+                        observation.getSelfFacing() == null
+                                ? null : observation.getSelfFacing().name()),
                 tiles,
                 entities,
                 heard,
@@ -1420,7 +1428,7 @@ public final class AgentSession implements AutoCloseable {
 
     private AgentProtocol.Identity currentIdentity() {
         return new AgentProtocol.Identity(
-                runId, floorId, agentId,
+                worldId, runId, floorId, agentId,
                 sessionEpoch, requestGeneration);
     }
 
@@ -1447,8 +1455,9 @@ public final class AgentSession implements AutoCloseable {
     private static AgentProtocol.Identity copyIdentity(
             AgentProtocol.Identity identity) {
         return new AgentProtocol.Identity(
-                identity.runId, identity.floorId, identity.agentId,
-                identity.sessionEpoch, identity.requestGeneration);
+                identity.worldId, identity.runId, identity.floorId,
+                identity.agentId, identity.sessionEpoch,
+                identity.requestGeneration);
     }
 
     private static EventKey eventKey(

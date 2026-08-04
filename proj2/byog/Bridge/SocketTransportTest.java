@@ -325,6 +325,7 @@ public class SocketTransportTest {
                     + AgentProtocol.ENVELOPE_VERSION + "\","
                     + "\"messageId\":\"future-message\","
                     + "\"messageSeq\":0,"
+                    + "\"worldId\":\"world-test\","
                     + "\"runId\":\"" + RUN_ID + "\","
                     + "\"floorId\":" + FLOOR_ID + ","
                     + "\"agentId\":\"guard-a\","
@@ -363,7 +364,7 @@ public class SocketTransportTest {
 
     private static AgentProtocol.Identity identity() {
         return new AgentProtocol.Identity(
-                RUN_ID, FLOOR_ID, "guard-a", 0, 0);
+                "world-test", RUN_ID, FLOOR_ID, "guard-a", 0, 0);
     }
 
     private static IdGenerator deterministicIds() {
@@ -434,6 +435,7 @@ public class SocketTransportTest {
                 + AgentProtocol.ENVELOPE_VERSION + "\","
                 + "\"messageId\":\"server-message\","
                 + "\"messageSeq\":0,"
+                + "\"worldId\":\"world-test\","
                 + "\"runId\":\"" + RUN_ID + "\","
                 + "\"floorId\":" + FLOOR_ID + ","
                 + "\"agentId\":\"guard-a\","

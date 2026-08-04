@@ -93,4 +93,10 @@ public class SquareRoom implements Room{
         }
         return floors;
     }
+
+    /** 判断坐标是否位于本房间的内部地板区域（不含墙壁边框）。 */
+    public boolean containsFloor(Position p) {
+        return p.x >= position.x + 1 && p.x <= position.x + size - 2
+                && p.y >= position.y + 1 && p.y <= position.y + size - 2;
+    }
 }

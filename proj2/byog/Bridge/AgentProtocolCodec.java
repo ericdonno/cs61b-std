@@ -676,15 +676,16 @@ public final class AgentProtocolCodec {
             throw new IllegalArgumentException(
                     "unsupported schemaVersion: " + envelope.schemaVersion);
         }
-        if (envelope.messageId == null || envelope.runId == null
-                || envelope.agentId == null) {
+        if (envelope.messageId == null || envelope.worldId == null
+                || envelope.runId == null || envelope.agentId == null) {
             throw new IllegalArgumentException(
-                    "messageId, runId and agentId are required");
+                    "messageId, worldId, runId and agentId are required");
         }
         JsonObject obj = new JsonObject(new LinkedHashMap<>());
         obj.members().put("schemaVersion", new JsonString(envelope.schemaVersion));
         obj.members().put("messageId", new JsonString(envelope.messageId));
         obj.members().put("messageSeq", new JsonNumber(envelope.messageSeq, true));
+        obj.members().put("worldId", new JsonString(envelope.worldId));
         obj.members().put("runId", new JsonString(envelope.runId));
         obj.members().put("floorId", new JsonNumber(envelope.floorId, true));
         obj.members().put("agentId", new JsonString(envelope.agentId));
@@ -725,6 +726,7 @@ public final class AgentProtocolCodec {
         obj.members().put("observationSeq", new JsonNumber(d.observationSeq(), true));
         obj.members().put("requestGeneration", new JsonNumber(d.requestGeneration(), true));
         obj.members().put("observedAtTurn", new JsonNumber(d.observedAtTurn(), true));
+        obj.members().put("visionMode", new JsonString(d.visionMode()));
         obj.members().put("self", encodeSelf(d.self()));
         obj.members().put("visibleTiles", encodeVisibleTiles(d.visibleTiles()));
         obj.members().put("visibleEntities", encodeVisibleEntities(d.visibleEntities()));
@@ -738,6 +740,8 @@ public final class AgentProtocolCodec {
         JsonObject obj = new JsonObject(new LinkedHashMap<>());
         obj.members().put("position", encodePosition(self.position()));
         obj.members().put("hp", new JsonNumber(self.hp(), true));
+        obj.members().put("maxHp", new JsonNumber(self.maxHp(), true));
+        obj.members().put("facing", new JsonString(self.facing()));
         return obj;
     }
 
@@ -972,8 +976,9 @@ public final class AgentProtocolCodec {
 
     private static DecodeResult decodeEnvelope(JsonObject obj) {
         ensureOnlyFields(obj, "envelope",
-                "schemaVersion", "messageId", "messageSeq", "runId", "floorId",
-                "agentId", "sessionEpoch", "logicalTick", "type", "data");
+                "schemaVersion", "messageId", "messageSeq", "worldId", "runId",
+                "floorId", "agentId", "sessionEpoch", "logicalTick", "type",
+                "data");
         String schemaVersion = requireString(obj, "schemaVersion");
         if (schemaVersion == null) {
             return fail(FailureReason.MISSING_REQUIRED, "schemaVersion");
@@ -989,6 +994,10 @@ public final class AgentProtocolCodec {
         Long messageSeq = requireInt(obj, "messageSeq");
         if (messageSeq == null) {
             return fail(FailureReason.MISSING_REQUIRED, "messageSeq");
+        }
+        String worldId = requireString(obj, "worldId");
+        if (worldId == null) {
+            return fail(FailureReason.MISSING_REQUIRED, "worldId");
         }
         String runId = requireString(obj, "runId");
         if (runId == null) {
@@ -1039,7 +1048,7 @@ public final class AgentProtocolCodec {
                 ((DecodeResult.Success) dataResult).envelope().data;
         AgentProtocol.Envelope envelope = new AgentProtocol.Envelope(
                 schemaVersion, messageId, messageSeq,
-                runId, toIntExact(floorId, "floorId"), agentId,
+                worldId, runId, toIntExact(floorId, "floorId"), agentId,
                 sessionEpoch, logicalTick,
                 type, data);
         return new DecodeResult.Success(envelope);
@@ -1062,8 +1071,9 @@ public final class AgentProtocolCodec {
     private static DecodeResult decodeObservationData(JsonObject obj) {
         ensureOnlyFields(obj, "observation",
                 "observationVersion", "decisionId", "observationSeq",
-                "requestGeneration", "observedAtTurn", "self", "visibleTiles",
-                "visibleEntities", "heardEvents", "pendingEvents", "capabilities");
+                "requestGeneration", "observedAtTurn", "visionMode", "self",
+                "visibleTiles", "visibleEntities", "heardEvents",
+                "pendingEvents", "capabilities");
         String observationVersion = requireString(obj, "observationVersion");
         if (observationVersion == null) {
             return fail(FailureReason.MISSING_REQUIRED, "observationVersion");
@@ -1088,26 +1098,53 @@ public final class AgentProtocolCodec {
         if (observedAtTurn == null) {
             return fail(FailureReason.MISSING_REQUIRED, "observedAtTurn");
         }
+        String visionMode = requireString(obj, "visionMode");
+        if (visionMode == null) {
+            return fail(FailureReason.MISSING_REQUIRED, "visionMode");
+        }
+        if (!"DIRECTIONAL".equals(visionMode)
+                && !"OMNIDIRECTIONAL".equals(visionMode)) {
+            return fail(FailureReason.UNKNOWN_FIELD,
+                    "visionMode: " + visionMode);
+        }
         JsonObject selfObj = requireObject(obj, "self");
-        ensureOnlyFields(selfObj, "observation.self", "position", "hp");
+        ensureOnlyFields(selfObj, "observation.self",
+                "position", "hp", "maxHp", "facing");
         AgentProtocol.PositionData selfPosition =
                 decodeRequiredPositionFromField(selfObj, "position");
         long selfHp = requireInt(selfObj, "hp");
+        long selfMaxHp = requireInt(selfObj, "maxHp");
+        String selfFacing = requireString(selfObj, "facing");
+        if (selfFacing == null) {
+            return fail(FailureReason.MISSING_REQUIRED, "self.facing");
+        }
+        if (!isValidFacing(selfFacing)) {
+            return fail(FailureReason.UNKNOWN_FIELD,
+                    "self.facing: " + selfFacing);
+        }
         List<AgentProtocol.VisibleTileData> visibleTiles = decodeVisibleTiles(obj.members().get("visibleTiles"));
         List<AgentProtocol.VisibleEntityData> visibleEntities = decodeVisibleEntities(obj.members().get("visibleEntities"));
         List<AgentProtocol.HeardEventData> heardEvents = decodeHeardEvents(obj.members().get("heardEvents"));
         List<AgentProtocol.WorldEventData> pendingEvents = decodeWorldEventList(obj.members().get("pendingEvents"));
         AgentProtocol.CapabilitiesData capabilities = decodeCapabilities(obj.members().get("capabilities"));
         return new DecodeResult.Success(new AgentProtocol.Envelope(
-                null, null, 0, null, 0, null, 0, 0,
+                null, null, 0, null, null, 0, null, 0, 0,
                 AgentProtocol.MessageType.OBSERVATION,
                 new AgentProtocol.ObservationData(
                         observationVersion, decisionId, observationSeq,
-                        requestGeneration, observedAtTurn,
+                        requestGeneration, observedAtTurn, visionMode,
                         new AgentProtocol.SelfData(
-                                selfPosition, toIntExact(selfHp, "self.hp")),
+                                selfPosition, toIntExact(selfHp, "self.hp"),
+                                toIntExact(selfMaxHp, "self.maxHp"),
+                                selfFacing),
                         visibleTiles, visibleEntities,
                         heardEvents, pendingEvents, capabilities)));
+    }
+
+    /** 合法 facing 白名单：NORTH/EAST/SOUTH/WEST。 */
+    private static boolean isValidFacing(String facing) {
+        return "NORTH".equals(facing) || "EAST".equals(facing)
+                || "SOUTH".equals(facing) || "WEST".equals(facing);
     }
 
     private static DecodeResult decodeSubmitIntentData(JsonObject obj) {
@@ -1132,7 +1169,7 @@ public final class AgentProtocolCodec {
         }
         AgentProtocol.IntentData intent = intentResult.intent();
         return new DecodeResult.Success(new AgentProtocol.Envelope(
-                null, null, 0, null, 0, null, 0, 0,
+                null, null, 0, null, null, 0, null, 0, 0,
                 AgentProtocol.MessageType.SUBMIT_INTENT,
                 new AgentProtocol.SubmitIntentData(
                         decisionId, observationSeq, requestGeneration, intent)));
@@ -1279,7 +1316,7 @@ public final class AgentProtocolCodec {
         }
         String overrideReason = requireNullableString(obj, "overrideReason");
         return new DecodeResult.Success(new AgentProtocol.Envelope(
-                null, null, 0, null, 0, null, 0, 0,
+                null, null, 0, null, null, 0, null, 0, 0,
                 AgentProtocol.MessageType.ACTION_FEEDBACK,
                 new AgentProtocol.ActionFeedbackData(
                         decisionId, toIntExact(actionIndex, "actionIndex"),
@@ -1300,7 +1337,7 @@ public final class AgentProtocolCodec {
         }
         String reason = requireString(obj, "reason");
         return new DecodeResult.Success(new AgentProtocol.Envelope(
-                null, null, 0, null, 0, null, 0, 0,
+                null, null, 0, null, null, 0, null, 0, 0,
                 AgentProtocol.MessageType.CANCEL_REQUEST,
                 new AgentProtocol.CancelRequestData(
                         decisionId, requestGeneration, reason)));
@@ -1318,7 +1355,7 @@ public final class AgentProtocolCodec {
             return fail(FailureReason.MISSING_REQUIRED, "requestGeneration");
         }
         return new DecodeResult.Success(new AgentProtocol.Envelope(
-                null, null, 0, null, 0, null, 0, 0,
+                null, null, 0, null, null, 0, null, 0, 0,
                 AgentProtocol.MessageType.CANCEL_ACK,
                 new AgentProtocol.CancelAckData(decisionId, requestGeneration)));
     }
@@ -1345,7 +1382,7 @@ public final class AgentProtocolCodec {
         String relatedEntityId =
                 requireNullableString(obj, "relatedEntityId");
         return new DecodeResult.Success(new AgentProtocol.Envelope(
-                null, null, 0, null, 0, null, 0, 0,
+                null, null, 0, null, null, 0, null, 0, 0,
                 AgentProtocol.MessageType.WORLD_EVENT,
                 new AgentProtocol.WorldEventData(
                         eventType, logicalTick, pos, relatedEntityId)));
@@ -1358,7 +1395,7 @@ public final class AgentProtocolCodec {
             return fail(FailureReason.MISSING_REQUIRED, "logicalTick");
         }
         return new DecodeResult.Success(new AgentProtocol.Envelope(
-                null, null, 0, null, 0, null, 0, 0,
+                null, null, 0, null, null, 0, null, 0, 0,
                 AgentProtocol.MessageType.HEARTBEAT,
                 new AgentProtocol.HeartbeatData(logicalTick)));
     }
@@ -1371,7 +1408,7 @@ public final class AgentProtocolCodec {
         }
         String offendingType = requireString(obj, "offendingType");
         return new DecodeResult.Success(new AgentProtocol.Envelope(
-                null, null, 0, null, 0, null, 0, 0,
+                null, null, 0, null, null, 0, null, 0, 0,
                 AgentProtocol.MessageType.PROTOCOL_ERROR,
                 new AgentProtocol.ProtocolErrorData(reason, offendingType)));
     }
@@ -1393,6 +1430,10 @@ public final class AgentProtocolCodec {
             Long y = requireInt(obj, "y");
             String type = requireString(obj, "type");
             Boolean walkable = requireBool(obj, "walkable");
+            if (!isValidTileType(type)) {
+                throw new SchemaException(FailureReason.UNKNOWN_FIELD,
+                        "visibleTiles[" + index + "].type: " + type);
+            }
             result.add(new AgentProtocol.VisibleTileData(
                     toIntExact(x, "visibleTiles[" + index + "].x"),
                     toIntExact(y, "visibleTiles[" + index + "].y"),
@@ -1400,6 +1441,16 @@ public final class AgentProtocolCodec {
             index++;
         }
         return result;
+    }
+
+    /** 合法可见 tile 类型白名单：与 {@code VisibleTile.TileType} 一致，不含 APPLE。 */
+    private static boolean isValidTileType(String type) {
+        return switch (type) {
+            case "FLOOR", "WALL", "STAIRS", "NOTHING", "GRASS", "WATER",
+                    "FLOWER", "LOCKED_DOOR", "UNLOCKED_DOOR", "SAND",
+                    "MOUNTAIN", "TREE", "UNKNOWN" -> true;
+            default -> false;
+        };
     }
 
     private static List<AgentProtocol.VisibleEntityData> decodeVisibleEntities(JsonValue val) {

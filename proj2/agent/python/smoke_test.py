@@ -44,6 +44,7 @@ def build_observation(
         "schemaVersion": ENVELOPE_VERSION,
         "messageId": f"java-message-{message_seq}",
         "messageSeq": message_seq,
+        "worldId": "world-test",
         "runId": "smoke-run",
         "floorId": 1,
         "agentId": agent_id,
@@ -56,7 +57,13 @@ def build_observation(
             "observationSeq": 5,
             "requestGeneration": 2,
             "observedAtTurn": 42,
-            "self": {"position": {"x": 2, "y": 2}, "hp": 20},
+            "visionMode": "DIRECTIONAL",
+            "self": {
+                "position": {"x": 2, "y": 2},
+                "hp": 20,
+                "maxHp": 20,
+                "facing": "EAST",
+            },
             "visibleTiles": [
                 {"x": 2, "y": 2, "type": "FLOOR", "walkable": True},
                 {"x": 1, "y": 2, "type": "FLOOR", "walkable": True},

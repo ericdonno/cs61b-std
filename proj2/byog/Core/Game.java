@@ -10,23 +10,39 @@ import byog.Bridge.AgentSessionConfig;
 import byog.Bridge.MonotonicClock;
 import byog.Common.Difficulty;
 import byog.Common.Direction;
+import byog.Common.Facing;
+import byog.Common.VisionMode;
 import byog.Entity.Entity;
 import byog.Entity.EntityManager;
 import byog.Entity.Enemy;
-import byog.Entity.EntityState;
 import byog.Entity.Player;
+import byog.Entity.PlayerRunState;
 import byog.Helper.Logger;
 import byog.IO.GameConfig;
 import byog.IO.GameSaveData;
-import byog.IO.SaveLoadManager;
+import byog.IO.HealthPackPosition;
+import byog.IO.LoadResult;
+import byog.IO.SaveResult;
+import byog.IO.WorldName;
+import byog.IO.WorldSaveEntry;
+import byog.IO.WorldSaveRepository;
+import byog.IO.WorldSaveSummary;
+import byog.IO.FileWorldSaveRepository;
+import byog.IO.Clock;
+import byog.IO.EnemySaveData;
 import byog.TileEngine.TERenderer;
 import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
 import byog.WorldGen.Room;
 import byog.WorldGen.RoomGraph;
+import byog.WorldGen.RoomLocator;
 import byog.WorldGen.SquareRoom;
+import byog.WorldGen.StairPlacement;
 import byog.WorldGen.WorldGenResult;
 import byog.WorldGen.WorldGenerator;
+import byog.WorldGen.HealthPackGenerator;
+import byog.WorldGen.HealthPackPickup;
+import byog.IO.HealthPackConfig;
 import byog.lab5.Position;
 import edu.princeton.cs.introcs.StdDraw;
 
@@ -41,10 +57,9 @@ import java.util.UUID;
 
 public class Game {
     TERenderer ter = new TERenderer();
-    public static final int WIDTH = 80;
-    public static final int HEIGHT = 30;
-    public static final int UI_HEIGHT = 3;
-    public static final int WINDOW_HEIGHT = HEIGHT + UI_HEIGHT;
+    public static final int WIDTH = ScreenLayout.WORLD_WIDTH;
+    public static final int HEIGHT = ScreenLayout.WORLD_HEIGHT;
+    public static final int WINDOW_HEIGHT = ScreenLayout.WINDOW_HEIGHT;
 
     private TETile[][] world;
     private Player player;
@@ -55,9 +70,28 @@ public class Game {
     private long frameCounter = 0;
     private long attackFrame = -1;
     private int floorLevel = 1;
+    /** 当前楼层剩余苹果坐标（按生成顺序，供拾取与存档使用）。 */
+    private List<Position> healthPackPositions = new ArrayList<>();
 
     private Difficulty difficulty;
     private GameConfig gameConfig;
+    /** 命名世界的稳定身份；覆盖同名世界时生成新值。 */
+    private String worldId;
+    /** 当前世界显示名。 */
+    private String worldName;
+    /** 视野模式：默认 directional，随世界存档保存。 */
+    private VisionMode visionMode = VisionMode.DIRECTIONAL;
+    /** 命名世界存档仓库；测试可注入临时根目录。 */
+    private WorldSaveRepository worldRepository;
+    /** 世界名输入缓冲。 */
+    private final StringBuilder worldNameInput = new StringBuilder();
+    /** 重名确认：待确认覆盖的已有世界名。 */
+    private String pendingOverwriteName;
+    /** 重名确认后：被替换的旧 worldId（覆盖保存时写入 marker）。 */
+    private String pendingReplacesWorldId;
+    /** 世界列表翻页偏移。 */
+    private int loadPage = 0;
+    private static final int LOAD_PAGE_SIZE = 8;
     /** Interactive agent-run identity. Not used by playWithInputString(). */
     private String runId;
     private long logicalTick = 0;
@@ -66,27 +100,42 @@ public class Game {
     private final boolean agentSessionConfigInjected;
 
     public Game() {
-        agentSessionConfig = null;
-        agentSessionConfigInjected = false;
+        this(null);
     }
 
     public Game(AgentSessionConfig agentSessionConfig) {
-        if (agentSessionConfig == null) {
-            throw new IllegalArgumentException(
-                    "agentSessionConfig must not be null");
+        if (agentSessionConfig != null) {
+            this.agentSessionConfig = agentSessionConfig;
+            this.agentSessionConfigInjected = true;
+        } else {
+            this.agentSessionConfig = null;
+            this.agentSessionConfigInjected = false;
         }
-        this.agentSessionConfig = agentSessionConfig;
-        this.agentSessionConfigInjected = true;
+        this.worldRepository = new FileWorldSaveRepository(
+                java.nio.file.Paths.get(FileWorldSaveRepository.DEFAULT_ROOT),
+                Clock.system());
+    }
+
+    /** 测试注入：使用临时存档根目录。 */
+    public void setWorldRepository(WorldSaveRepository worldRepository) {
+        if (worldRepository == null) {
+            throw new IllegalArgumentException(
+                    "worldRepository must not be null");
+        }
+        this.worldRepository = worldRepository;
     }
 
     // 游戏状态枚举
     private enum GameState {
-        MENU, DIFFICULTY_SELECT, SEED_INPUT, PLAYING, PAUSED, QUIT_PENDING, QUIT
+        MENU, WORLD_NAME_INPUT, WORLD_OVERWRITE_CONFIRM, WORLD_LOAD_SELECT,
+        DIFFICULTY_SELECT, SEED_INPUT, PLAYING, PAUSED, QUIT_PENDING, QUIT
     }
 
     // 暂停按钮常量（位于顶部 UI 栏内）
     private static final double BTN_CENTER_X = 76.0;
-    private static final double BTN_CENTER_Y = HEIGHT + UI_HEIGHT / 2.0;
+    private static final double BTN_CENTER_Y =
+            ScreenLayout.WORLD_HEIGHT + ScreenLayout.TOP_UI_HEIGHT / 2.0
+                    + ScreenLayout.BOTTOM_UI_HEIGHT;
     private static final double BTN_HALF_W = 3.5;
     private static final double BTN_HALF_H = 0.75;
 
@@ -115,9 +164,11 @@ public class Game {
             while (currentState != GameState.QUIT) {
                 frameCounter++;
 
-                // 处理键盘输入
+                // 处理键盘输入（世界名输入保留原始大小写，其余状态转小写）
                 if (StdDraw.hasNextKeyTyped()) {
-                    char c = Character.toLowerCase(StdDraw.nextKeyTyped());
+                    char raw = StdDraw.nextKeyTyped();
+                    char c = currentState == GameState.WORLD_NAME_INPUT
+                            ? raw : Character.toLowerCase(raw);
                     currentState = processInput(currentState, c, seedStr);
                 }
 
@@ -199,15 +250,78 @@ public class Game {
         switch (state) {
             case MENU:
                 if (c == 'n') {
-                    return GameState.DIFFICULTY_SELECT;
+                    worldNameInput.setLength(0);
+                    return GameState.WORLD_NAME_INPUT;
                 } else if (c == 'l') {
-                    if (loadGameState()) {
-                        Logger.section("Game started (loaded save).");
-                        return GameState.PLAYING;
-                    }
-                    return GameState.MENU;
+                    loadPage = 0;
+                    return GameState.WORLD_LOAD_SELECT;
                 } else if (c == 'q') {
                     return GameState.QUIT;
+                }
+                return state;
+
+            case WORLD_NAME_INPUT:
+                if (c == '\n' || c == '\r') {
+                    String name;
+                    try {
+                        name = WorldName.validateForDisplay(
+                                worldNameInput.toString());
+                    } catch (IllegalArgumentException e) {
+                        Logger.error("Invalid world name: %s", e.getMessage());
+                        worldNameInput.setLength(0);
+                        return state;
+                    }
+                    String existingWorldId = findWorldIdByName(name);
+                    if (existingWorldId != null) {
+                        pendingOverwriteName = existingWorldId;
+                        pendingReplacesWorldId = existingWorldId;
+                        Logger.info(
+                                "World name '%s' already exists; confirm overwrite.",
+                                name);
+                        return GameState.WORLD_OVERWRITE_CONFIRM;
+                    }
+                    worldName = name;
+                    return GameState.DIFFICULTY_SELECT;
+                } else if (c == 8 || c == 127) {
+                    // 退格：删除最后一个 code point
+                    String current = worldNameInput.toString();
+                    if (!current.isEmpty()) {
+                        worldNameInput.deleteCharAt(current.length() - 1);
+                    }
+                    return state;
+                } else if (!Character.isISOControl(c)) {
+                    worldNameInput.append(c);
+                }
+                return state;
+
+            case WORLD_OVERWRITE_CONFIRM:
+                if (c == 'y') {
+                    worldName = WorldName.validateForDisplay(
+                            worldNameInput.toString());
+                    pendingReplacesWorldId = pendingOverwriteName;
+                    return GameState.DIFFICULTY_SELECT;
+                } else if (c == 'n') {
+                    pendingOverwriteName = null;
+                    pendingReplacesWorldId = null;
+                    worldNameInput.setLength(0);
+                    return GameState.WORLD_NAME_INPUT;
+                }
+                return state;
+
+            case WORLD_LOAD_SELECT:
+                if (c == 'q') {
+                    return GameState.MENU;
+                } else if (c == 'n') {
+                    loadPage++;
+                    return state;
+                } else if (c == 'p') {
+                    loadPage = Math.max(0, loadPage - 1);
+                    return state;
+                } else if (c >= '1' && c <= '9') {
+                    int index = loadPage * LOAD_PAGE_SIZE + (c - '1');
+                    if (selectWorldToLoad(index)) {
+                        return GameState.PLAYING;
+                    }
                 }
                 return state;
 
@@ -245,14 +359,18 @@ public class Game {
                     WorldGenResult result = generateWorld(seedStr.toString(), floorLevel);
                     player = spawnPlayer(this.seed, floorLevel);
                     addEntity(player);
-                    List<Enemy> enemies = Enemy.spawnEnemies(world, this.seed, player.getPosition(), floorLevel - 1, gameConfig);
+                    List<Enemy> enemies = Enemy.spawnEnemies(world, this.seed, player.getPosition(), floorLevel - 1, floorLevel, gameConfig);
                     for (Enemy e : enemies) {
                         addEntity(e);
                     }
-                    placeStairs(result, player.getPosition(), floorLevel);
+                    StairPlacement stairs = placeStairs(result, player.getPosition(), floorLevel);
+                    placeHealthPacks(result, stairs);
                     if (agentRuntimeEnabled) {
                         beginAgentRun();
                     }
+                    // 首次保存：生成新 worldId（覆盖同名世界时也必须生成新值）。
+                    worldId = "world-" + UUID.randomUUID();
+                    saveGameState();
 
                     Logger.section("Game started (new game) - " + difficulty.getKey() + ".");
                     return GameState.PLAYING;
@@ -301,6 +419,15 @@ public class Game {
             case MENU:
                 drawMenu();
                 break;
+            case WORLD_NAME_INPUT:
+                drawWorldNameInput();
+                break;
+            case WORLD_OVERWRITE_CONFIRM:
+                drawOverwriteConfirm();
+                break;
+            case WORLD_LOAD_SELECT:
+                drawWorldLoadSelect();
+                break;
             case DIFFICULTY_SELECT:
                 drawDifficultySelect();
                 break;
@@ -327,6 +454,59 @@ public class Game {
         StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0, "New Game (N)");
         StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 - 1, "Load Game (L)");
         StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 - 2, "Quit (Q)");
+    }
+
+    /** 绘制世界名输入界面。 */
+    private void drawWorldNameInput() {
+        StdDraw.clear(StdDraw.BLACK);
+        StdDraw.setPenColor(StdDraw.WHITE);
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 + 2, "Enter world name:");
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0,
+                worldNameInput.toString());
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 - 2, "Press Enter to confirm");
+    }
+
+    /** 绘制重名覆盖确认界面。 */
+    private void drawOverwriteConfirm() {
+        StdDraw.clear(StdDraw.BLACK);
+        StdDraw.setPenColor(new Color(200, 120, 60));
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0 + 2,
+                "World name already exists: " + worldNameInput);
+        StdDraw.text(WIDTH / 2.0, HEIGHT / 2.0,
+                "Overwrite it? (Y)es / (N)o");
+    }
+
+    /** 绘制世界列表选择界面（分页）。 */
+    private void drawWorldLoadSelect() {
+        StdDraw.clear(StdDraw.BLACK);
+        StdDraw.setPenColor(StdDraw.WHITE);
+        StdDraw.text(WIDTH / 2.0, HEIGHT + 2, "Select a world to load");
+        List<WorldSaveEntry> entries = worldRepository.list();
+        int start = loadPage * LOAD_PAGE_SIZE;
+        for (int i = 0; i < LOAD_PAGE_SIZE; i++) {
+            int index = start + i;
+            if (index >= entries.size()) {
+                break;
+            }
+            WorldSaveEntry entry = entries.get(index);
+            double y = HEIGHT - 3 - i;
+            if (entry.isReadable()) {
+                WorldSaveSummary summary = entry.summary();
+                StdDraw.setPenColor(StdDraw.WHITE);
+                StdDraw.text(WIDTH / 2.0, y, String.format(
+                        "%d - %s | floor %d | HP %d | %s",
+                        i + 1, summary.worldName(), summary.floorLevel(),
+                        summary.playerHp(), summary.difficulty()));
+            } else {
+                StdDraw.setPenColor(new Color(180, 60, 60));
+                StdDraw.text(WIDTH / 2.0, y, String.format(
+                        "%d - (unreadable) %s", i + 1,
+                        entry.failurePath()));
+            }
+        }
+        StdDraw.setPenColor(new Color(160, 160, 160));
+        StdDraw.text(WIDTH / 2.0, 2,
+                "(N)ext  (P)rev  (Q)uit");
     }
 
     /**
@@ -360,24 +540,109 @@ public class Game {
     private void drawGameWithPauseButton(boolean isPaused) {
         TETile[][] frame = buildActiveFrame();
         StdDraw.clear(new Color(0, 0, 0));
+        // 世界 tile 统一上移到底部上下文条之上
         for (int x = 0; x < frame.length; x++) {
             for (int y = 0; y < frame[0].length; y++) {
-                frame[x][y].draw(x, y);
+                frame[x][y].draw(x, ScreenLayout.worldToScreenY(y));
             }
         }
+        drawFacingMarkers();
+        drawBottomHoverBar();
         drawUIBar(isPaused);
         StdDraw.show();
     }
 
+    /** 在所有 tile 绘制后，为每个活敌人画金色朝向标记（不占用相邻 tile）。 */
+    private void drawFacingMarkers() {
+        if (entityMgr == null) {
+            return;
+        }
+        StdDraw.setPenColor(new Color(255, 200, 60));
+        for (Entity e : entityMgr.getAllEntities()) {
+            if (!(e instanceof Enemy enemy) || !e.isAlive()
+                    || enemy.getFacing() == null) {
+                continue;
+            }
+            Position p = e.getPosition();
+            double sx = p.x + 0.5;
+            double sy = ScreenLayout.worldToScreenY(p.y) + 0.5;
+            switch (enemy.getFacing()) {
+                case NORTH:
+                    StdDraw.line(sx - 0.15, sy + 0.30, sx + 0.15, sy + 0.30);
+                    break;
+                case SOUTH:
+                    StdDraw.line(sx - 0.15, sy - 0.30, sx + 0.15, sy - 0.30);
+                    break;
+                case EAST:
+                    StdDraw.line(sx + 0.30, sy - 0.15, sx + 0.30, sy + 0.15);
+                    break;
+                case WEST:
+                    StdDraw.line(sx - 0.30, sy - 0.15, sx - 0.30, sy + 0.15);
+                    break;
+            }
+        }
+    }
+
+    /** 底部两行上下文条：按需显示 hover 信息，并高亮聚焦敌人的 committed FOV。 */
+    private void drawBottomHoverBar() {
+        StdDraw.setPenColor(new Color(20, 20, 20));
+        StdDraw.filledRectangle(ScreenLayout.WORLD_WIDTH / 2.0, 1.0,
+                ScreenLayout.WORLD_WIDTH / 2.0, 1.0);
+        Position worldPos = mouseToWorld();
+        HoverModel.HoverInfo info = HoverModel.resolve(
+                world, entityMgr, player, gameConfig, worldPos);
+        if (info.isEmpty()) {
+            return;
+        }
+        StdDraw.setPenColor(StdDraw.WHITE);
+        if (info.line1() != null) {
+            StdDraw.text(ScreenLayout.WORLD_WIDTH / 2.0, 1.5, info.line1());
+        }
+        if (info.line2() != null) {
+            StdDraw.text(ScreenLayout.WORLD_WIDTH / 2.0, 0.5, info.line2());
+        }
+        if (info.focusedEnemy() != null) {
+            highlightFov(info.focusedEnemy().getVisibleMask());
+        }
+    }
+
+    /** 鼠标屏幕坐标 → 世界逻辑坐标（与 tile 绘制互为逆映射）。 */
+    private Position mouseToWorld() {
+        int wx = (int) Math.floor(StdDraw.mouseX());
+        int wy = ScreenLayout.screenToWorldY(
+                (int) Math.floor(StdDraw.mouseY()));
+        return new Position(wx, wy);
+    }
+
+    /** 只读 committed mask 高亮，不重新计算 FOV。 */
+    private void highlightFov(boolean[][] mask) {
+        if (mask == null) {
+            return;
+        }
+        for (int x = 0; x < world.length && x < mask.length; x++) {
+            for (int y = 0; y < world[0].length && y < mask[x].length; y++) {
+                if (mask[x][y]) {
+                    StdDraw.setPenColor(new Color(255, 220, 120));
+                    StdDraw.filledSquare(
+                            x + 0.5, ScreenLayout.worldToScreenY(y) + 0.5,
+                            0.48);
+                }
+            }
+        }
+    }
+
     /** 绘制顶部 UI 栏（深灰背景 + 分隔线 + 暂停按钮 + HP 显示 + 蓄力条）。 */
     private void drawUIBar(boolean isPaused) {
-        double barY = HEIGHT + UI_HEIGHT / 2.0;
+        double barY = ScreenLayout.worldToScreenY(ScreenLayout.WORLD_HEIGHT)
+                + ScreenLayout.TOP_UI_HEIGHT / 2.0;
         // 背景
         StdDraw.setPenColor(new Color(30, 30, 30));
-        StdDraw.filledRectangle(WIDTH / 2.0, barY, WIDTH / 2.0, UI_HEIGHT / 2.0);
+        StdDraw.filledRectangle(WIDTH / 2.0, barY, WIDTH / 2.0,
+                ScreenLayout.TOP_UI_HEIGHT / 2.0);
         // 分隔线
         StdDraw.setPenColor(new Color(100, 100, 100));
-        StdDraw.line(0, HEIGHT, WIDTH, HEIGHT);
+        StdDraw.line(0, ScreenLayout.worldToScreenY(ScreenLayout.WORLD_HEIGHT),
+                WIDTH, ScreenLayout.worldToScreenY(ScreenLayout.WORLD_HEIGHT));
 
         // HP 显示
         if (player != null) {
@@ -528,9 +793,25 @@ public class Game {
         player.move(direction, world, entityMgr);
         if (!player.getPosition().equals(oldPos)) {
             Position newPos = player.getPosition();
+            pickUpHealthPack(newPos);
             if (world[newPos.x][newPos.y] == Tileset.STAIRS) {
                 nextFloor();
             }
+        }
+    }
+
+    /**
+     * 玩家进入苹果格且缺血时治疗并消耗；满血时不消耗。敌人移动不触发此流程。
+     * 治疗结果通过 Logger 记录恢复量与治疗后生命值。
+     */
+    private void pickUpHealthPack(Position pos) {
+        if (HealthPackPickup.tryPickup(world, player, pos,
+                gameConfig.healthPackHealAmount, healthPackPositions)) {
+            Logger.info("Picked up health pack at %s: +%d HP -> %d/%d",
+                    pos, gameConfig.healthPackHealAmount,
+                    player.getHp(), player.getMaxHp());
+        } else if (world[pos.x][pos.y] == Tileset.APPLE) {
+            Logger.debug("Full HP: health pack at %s not consumed", pos);
         }
     }
 
@@ -647,21 +928,11 @@ public class Game {
         return p;
     }
 
-    /**
-     * 在指定位置放置玩家（用于读档）。
-     * @param x 玩家 X 坐标
-     * @param y 玩家 Y 坐标
-     * @return 创建的 Player 对象
-     */
-    private Player spawnPlayerAt(int x, int y) {
-        return new Player(new Position(x, y));
-    }
-
-    /** 在当前楼层最远房间放置传送方块。 */
-    private void placeStairs(WorldGenResult result, Position playerPos, int floor) {
+    /** 在当前楼层最远房间放置传送方块，并返回类型化放置结果。 */
+    private StairPlacement placeStairs(WorldGenResult result, Position playerPos, int floor) {
         List<SquareRoom> rooms = result.getRooms();
         if (rooms.isEmpty()) {
-            return;
+            return null;
         }
         Random random = new Random((seed + "_F" + floor + "_stairs").hashCode());
         RoomGraph roomGraph = new RoomGraph(new ArrayList<>(rooms));
@@ -672,8 +943,25 @@ public class Game {
                 Position stairsPos = floors.get(random.nextInt(floors.size()));
                 world[stairsPos.x][stairsPos.y] = Tileset.STAIRS;
                 Logger.info("Stairs placed at %s (farthest room)", stairsPos);
+                return new StairPlacement(stairsPos, sq);
             }
         }
+        return null;
+    }
+
+    /** 在当前楼层放置苹果，并记录剩余位置供拾取与存档使用。 */
+    private void placeHealthPacks(WorldGenResult result, StairPlacement stairs) {
+        SquareRoom spawnRoom = RoomLocator.roomContaining(
+                result.getRooms(), player.getPosition());
+        List<Position> placed = HealthPackGenerator.place(
+                world, result.getRooms(), spawnRoom,
+                stairs == null ? null : stairs.room(), entityMgr,
+                new HealthPackConfig(gameConfig.healthPackMinCount,
+                        gameConfig.healthPackMaxCount,
+                        gameConfig.healthPackHealAmount),
+                (seed + "_F" + floorLevel + "_healthpack").hashCode());
+        healthPackPositions.clear();
+        healthPackPositions.addAll(placed);
     }
 
     /** 进入下一层：楼层+1、重新生成世界、重生玩家和敌人、放置传送门。 */
@@ -681,20 +969,25 @@ public class Game {
         if (agentRuntimeEnabled) {
             closeAllEnemyRuntimes();
         }
+        // 换层边界：只保留整局 HP；蓄力、动画计时和悬停等状态不跨层。
+        PlayerRunState runState = PlayerRunState.capture(player);
         floorLevel++;
         Logger.section("Entering Floor " + floorLevel);
 
         WorldGenResult result = generateWorld(this.seed, floorLevel);
         entityMgr = new EntityManager();
-        player = spawnPlayer(this.seed, floorLevel);
+        player = FloorTransitionService.createForNextFloor(
+                runState, gameConfig, new Position(0, 0));
+        Player.initPlayer(player, world, this.seed + "_F" + floorLevel);
         addEntity(player);
 
-        List<Enemy> enemies = Enemy.spawnEnemies(world, this.seed, player.getPosition(), floorLevel - 1, gameConfig);
+        List<Enemy> enemies = Enemy.spawnEnemies(world, this.seed, player.getPosition(), floorLevel - 1, floorLevel, gameConfig);
         for (Enemy e : enemies) {
             addEntity(e);
         }
 
-        placeStairs(result, player.getPosition(), floorLevel);
+        StairPlacement stairs = placeStairs(result, player.getPosition(), floorLevel);
+        placeHealthPacks(result, stairs);
         if (agentRuntimeEnabled) {
             attachEnemySessions();
             primeEnemyObservations();
@@ -704,139 +997,226 @@ public class Game {
     }
 
     /**
-     * 收集当前游戏状态并保存到文件。
-     * 将所有实体状态序列化到 extraData.entityStates，确保 HP、存活状态等在读档后一致。
+     * 收集当前游戏状态为类型化快照并保存到当前命名世界。
+     * 运行期状态（Session、queue、Lease、hover、动画计时）永不进入存档。
      */
     private void saveGameState() {
-        Logger.section("Save Game");
-        Logger.info("Saving game...");
-        GameSaveData data = new GameSaveData();
-        data.seed = this.seed;
-        data.playerX = player.getPosition().x;
-        data.playerY = player.getPosition().y;
-
-        List<EntityState> states = new ArrayList<>();
-        int idx = 0;
-        for (Entity e : entityMgr.getAllEntities()) {
-            EntityState s = new EntityState();
-            s.x = e.getPosition().x;
-            s.y = e.getPosition().y;
-            s.alive = e.isAlive();
-            if (e instanceof Player pl) {
-                s.type = "Player";
-                s.hp = pl.getHp();
-                s.sightRange = pl.getSightRange();
-                s.attackDamage = pl.getAttackDamage();
-                s.damageVariance = pl.getDamageVariance();
-                s.maxCharge = pl.getMaxCharge();
-                s.chargeRate = pl.getChargeRate();
-            } else if (e instanceof Enemy enemy) {
-                s.type = "Enemy";
-                s.agentId = enemy.getAgentId();
-                s.hp = enemy.getHp();
-                s.sightRange = enemy.getSightRange();
-                s.attackDamage = enemy.getAttackDamage();
-                s.damageVariance = enemy.getDamageVariance();
-                s.moveInterval = enemy.getMoveInterval();
-                data.entityAgentIds.put(idx, enemy.getAgentId());
-            }
-            states.add(s);
-            idx++;
+        if (worldId == null || worldId.isEmpty()) {
+            Logger.error("Cannot save: no active world.");
+            return;
         }
-        data.extraData.put("entityStates", (java.io.Serializable) states);
-        data.extraData.put("floorLevel", floorLevel);
-        data.extraData.put("difficulty", difficulty.getKey());
+        Logger.section("Save Game");
+        Logger.info("Saving game (world=%s)...", worldName);
+        GameSaveData data = captureSaveData();
+        SaveResult result = worldRepository.save(data);
+        if (!result.success()) {
+            Logger.error("Save failed: %s", result.failureReason());
+            return;
+        }
+        // 只有保存成功才清空覆盖 marker；失败时保留，避免旧档丢失 marker。
+        pendingReplacesWorldId = null;
+        if (result.warning() != null) {
+            Logger.error("Save warning: %s", result.warning());
+        } else {
+            Logger.info("Game saved successfully (world=%s).", worldId);
+        }
+    }
 
-        SaveLoadManager.save(data);
-        Logger.info("Game saved successfully.");
+    /** 从权威世界状态构建类型化存档快照。 */
+    private GameSaveData captureSaveData() {
+        GameSaveData data = new GameSaveData();
+        data.setWorldId(worldId);
+        data.setWorldName(worldName);
+        data.setReplacesWorldId(pendingReplacesWorldId);
+        data.setSeed(seed);
+        data.setFloorLevel(floorLevel);
+        data.setDifficulty(difficulty.getKey());
+        data.setVisionMode(visionMode);
+        data.setRunCurrentHp(PlayerRunState.capture(player).getCurrentHp());
+        data.setFloorPlayerPosition(player.getPosition());
+        data.setFloorPlayerCharge(player.getCharge());
+        Position stairs = findStairsPosition();
+        if (stairs != null) {
+            data.setStairsPosition(stairs);
+        } else {
+            data.setStairsPosition(new Position(-1, -1));
+        }
+        for (Position hp : healthPackPositions) {
+            data.addHealthPack(hp);
+        }
+        for (Entity e : entityMgr.getAllEntities()) {
+            if (e instanceof Enemy enemy) {
+                EnemySaveData es = new EnemySaveData();
+                es.setAgentId(enemy.getAgentId());
+                es.setPosition(enemy.getPosition());
+                es.setAlive(enemy.isAlive());
+                es.setHp(enemy.getHp());
+                es.setMaxHp(enemy.getMaxHp());
+                es.setSightRange(enemy.getSightRange());
+                es.setAttackDamage(enemy.getAttackDamage());
+                es.setDamageVariance(enemy.getDamageVariance());
+                es.setMoveInterval(enemy.getMoveInterval());
+                es.setFacing(enemy.getFacing() == null
+                        ? null : enemy.getFacing().name());
+                es.setPatrolState(enemy.getPatrolState());
+                data.getEnemyStates().add(es);
+            }
+        }
+        return data;
+    }
+
+    /** 扫描当前世界中的楼梯坐标；未放置时返回 null。 */
+    private Position findStairsPosition() {
+        for (int x = 0; x < world.length; x++) {
+            for (int y = 0; y < world[0].length; y++) {
+                if (world[x][y] == Tileset.STAIRS) {
+                    return new Position(x, y);
+                }
+            }
+        }
+        return null;
     }
 
     /**
-     * 从文件加载游戏状态并重建世界。
-     * 优先从 extraData.entityStates 恢复实体（含 HP、存货状态），
-     * 若旧存档无此字段则 fallback 到 seed 确定性重建。
-     * @return 加载成功返回 true，失败返回 false
+     * 坏档隔离：存档中所有坐标必须落在世界内（楼梯 (-1,-1) 哨兵除外）。
+     * 任一越界即拒绝整个加载，不做半恢复世界。
      */
-    private boolean loadGameState() {
-        if (!SaveLoadManager.saveExists()) {
-            Logger.info("No save file found.");
+    private boolean allPositionsWithinWorld(GameSaveData data) {
+        if (!withinWorld(data.getFloorPlayerPosition())) {
             return false;
         }
-        GameSaveData data = SaveLoadManager.load();
-        if (data == null) {
+        Position stairs = data.getStairsPosition();
+        if (stairs.x >= 0 && stairs.y >= 0
+                && !withinWorld(stairs)) {
             return false;
         }
+        for (HealthPackPosition hp : data.getHealthPacks()) {
+            if (!withinWorld(hp.toPosition())) {
+                return false;
+            }
+        }
+        for (EnemySaveData enemy : data.getEnemyStates()) {
+            if (!withinWorld(enemy.getPosition())) {
+                return false;
+            }
+        }
+        return true;
+    }
 
-        // 恢复楼层，旧存档无此字段时默认第1层
-        Integer savedFloor = (Integer) data.extraData.get("floorLevel");
-        floorLevel = (savedFloor != null) ? savedFloor : 1;
+    private boolean withinWorld(Position p) {
+        return p.x >= 0 && p.x < WIDTH && p.y >= 0 && p.y < HEIGHT;
+    }
 
-        // 恢复难度（旧存档无此字段默认 BALANCED）
-        String savedDifficulty = (String) data.extraData.get("difficulty");
-        difficulty = Difficulty.fromKey(savedDifficulty);
+    /**
+     * 读取并恢复指定命名世界；失败返回 false 并留在列表界面。
+     * 恢复顺序：验证 DTO → 生成基础世界 → 放楼梯 → 恢复苹果 → 恢复敌人
+     * → 创建新 runId/Session。
+     */
+    private boolean loadGameState(String loadWorldId) {
+        LoadResult loaded = worldRepository.load(loadWorldId);
+        if (!loaded.success()) {
+            Logger.error("Load failed: %s", loaded.failureReason());
+            return false;
+        }
+        GameSaveData data = loaded.data();
+        // 坏档隔离：坐标必须落在世界内，否则拒绝整个加载。
+        if (!allPositionsWithinWorld(data)) {
+            Logger.error("Load rejected: world %s has out-of-bounds positions",
+                    loadWorldId);
+            return false;
+        }
+        worldId = data.getWorldId();
+        worldName = data.getWorldName();
+        pendingReplacesWorldId = data.getReplacesWorldId();
+        seed = data.getSeed();
+        floorLevel = data.getFloorLevel();
+        difficulty = Difficulty.fromKey(data.getDifficulty());
         gameConfig = new GameConfig(difficulty);
         applyLoadedGameConfig();
+        visionMode = VisionMode.valueOf(data.getVisionMode());
 
         if (agentRuntimeEnabled) {
             closeAllEnemyRuntimes();
         }
-        WorldGenResult result = generateWorld(data.seed, floorLevel);
+        WorldGenResult result = generateWorld(seed, floorLevel);
         entityMgr = new EntityManager();
 
-        @SuppressWarnings("unchecked")
-        List<EntityState> states = (List<EntityState>) data.extraData.get("entityStates");
-        if (states != null) {
-            for (EntityState s : states) {
-                Entity e;
-                if ("Player".equals(s.type)) {
-                    player = new Player(new Position(s.x, s.y), s.hp, s.sightRange);
-                    if (s.attackDamage != 0) {
-                        player.setAttackDamage(s.attackDamage);
-                        player.setDamageVariance(s.damageVariance);
-                        player.setMaxCharge(s.maxCharge);
-                        player.setChargeRate(s.chargeRate);
-                    }
-                    e = player;
-                } else if ("Enemy".equals(s.type)) {
-                    Random random = new Random(data.seed.hashCode());
-                    int mvInterval = (s.moveInterval != 0) ? s.moveInterval : gameConfig.enemyMoveInterval;
-                    int atk = (s.attackDamage != 0) ? s.attackDamage : gameConfig.enemyAttack;
-                    int atkVariance = (s.damageVariance != 0) ? s.damageVariance : gameConfig.enemyDamageVariance;
-                    String agentId = null;
-                    if (data.entityAgentIds != null) {
-                        agentId = data.entityAgentIds.get(states.indexOf(s));
-                    }
-                    if (agentId == null) {
-                        agentId = (s.agentId != null) ? s.agentId : "entity-" + states.indexOf(s);
-                    }
-                    Enemy enemy = new Enemy(new Position(s.x, s.y), Tileset.ENEMY,
-                            s.hp, s.sightRange, mvInterval, atk, atkVariance,
-                            random, agentId,
-                            gameConfig.agentActionQueueLowWater,
-                            gameConfig.agentActionQueueHighWater);
-                    enemy.setPerceptionEnabled(true);
-                    e = enemy;
-                } else {
-                    continue;
-                }
-                if (!s.alive) {
-                    e.die();
-                }
-                addEntity(e);
-            }
+        // 玩家：整局 HP + 当前楼层 charge 恢复。
+        player = new Player(data.getFloorPlayerPosition(), gameConfig);
+        PlayerRunState runState = new PlayerRunState();
+        runState.setCurrentHp(data.getRunCurrentHp());
+        runState.restoreInto(player, gameConfig.playerHp);
+        player.restoreCharge(data.getFloorPlayerCharge());
+        addEntity(player);
+
+        // 楼梯与苹果：读档恢复剩余苹果，不重新掷位置。
+        Position stairs = data.getStairsPosition();
+        if (stairs.x >= 0 && stairs.y >= 0) {
+            world[stairs.x][stairs.y] = Tileset.STAIRS;
+        }
+        healthPackPositions.clear();
+        for (HealthPackPosition hp : data.getHealthPacks()) {
+            Position p = hp.toPosition();
+            world[p.x][p.y] = Tileset.APPLE;
+            healthPackPositions.add(p);
         }
 
-        // 放置传送方块（读档后需要重建）
-        if (player != null) {
-            placeStairs(result, player.getPosition(), floorLevel);
+        // 敌人：恢复身体状态（facing/patrol 由后续增量恢复）。
+        for (EnemySaveData es : data.getEnemyStates()) {
+            Random random = new Random(data.getSeed().hashCode());
+            Enemy enemy = new Enemy(es.getPosition(), Tileset.ENEMY,
+                    es.getHp(), es.getSightRange(), es.getMoveInterval(),
+                    es.getAttackDamage(), es.getDamageVariance(),
+                    random, es.getAgentId(),
+                    gameConfig.agentActionQueueLowWater,
+                    gameConfig.agentActionQueueHighWater);
+            enemy.setPerceptionEnabled(true);
+            enemy.setMaxHp(es.getMaxHp());
+            enemy.setAttackInterval(gameConfig.enemyAttackInterval);
+            if (es.getFacing() != null) {
+                enemy.setFacing(Facing.valueOf(es.getFacing()));
+            }
+            enemy.setPatrolState(es.getPatrolState());
+            if (!es.isAlive()) {
+                enemy.die();
+            }
+            addEntity(enemy);
         }
 
         if (agentRuntimeEnabled) {
             beginAgentRun();
         }
-
-        Logger.info("Game loaded successfully.");
+        Logger.section("Game started (loaded world " + worldName
+                + ", floor " + floorLevel + ").");
         return true;
+    }
+
+    /** 按显示名查找已有世界 ID；不存在返回 null。 */
+    private String findWorldIdByName(String name) {
+        String key = WorldName.comparisonKey(name);
+        for (WorldSaveEntry entry : worldRepository.list()) {
+            if (entry.isReadable()
+                    && WorldName.comparisonKey(entry.summary().worldName())
+                    .equals(key)) {
+                return entry.summary().worldId();
+            }
+        }
+        return null;
+    }
+
+    /** 从世界列表按页内索引选择并加载；失败返回 false。 */
+    private boolean selectWorldToLoad(int index) {
+        List<WorldSaveEntry> entries = worldRepository.list();
+        if (index < 0 || index >= entries.size()) {
+            Logger.info("No world at index %d.", index);
+            return false;
+        }
+        WorldSaveEntry entry = entries.get(index);
+        if (!entry.isReadable()) {
+            Logger.error("Selected world is unreadable.");
+            return false;
+        }
+        return loadGameState(entry.summary().worldId());
     }
 
     /**
@@ -870,7 +1250,7 @@ public class Game {
                             enemy.getMoveInterval())
                     .build();
             AgentProtocol.Identity identity = new AgentProtocol.Identity(
-                    runId, floorLevel, enemy.getAgentId(), 0, 0);
+                    worldId, runId, floorLevel, enemy.getAgentId(), 0, 0);
             AgentSession session = new AgentSession(
                     enemyConfig, identity, MonotonicClock.systemClock());
             try {
@@ -900,6 +1280,9 @@ public class Game {
                 new AiTickContext(runId, floorLevel, logicalTick);
         for (Enemy enemy : snapshotEnemies()) {
             if (enemy.isAlive()) {
+                enemy.setWorldId(worldId);
+                enemy.setVisionMode(visionMode);
+                enemy.setPatrolSeedKey((seed + "_patrol").hashCode());
                 enemy.collectAgentUpdates(
                         context, world, entityMgr, player);
             }

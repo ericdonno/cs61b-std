@@ -1,6 +1,7 @@
 package byog.Action;
 
 import byog.Common.Direction;
+import byog.Common.Facing;
 import static byog.Common.RandomUtils.uniform;
 import byog.Entity.Entity;
 import byog.Entity.EntityManager;
@@ -10,6 +11,7 @@ import byog.Helper.Logger;
 import byog.TileEngine.TETile;
 import byog.lab5.Position;
 
+import java.util.Objects;
 import java.util.Random;
 
 /**
@@ -33,9 +35,9 @@ public class AttackAction implements Action {
 
     /** 敌人攻击：指定方向，单体攻击。 */
     public AttackAction(EntityManager entityMgr, Direction direction, Random random) {
-        this.entityMgr = entityMgr;
-        this.direction = direction;
-        this.random = random;
+        this.entityMgr = Objects.requireNonNull(entityMgr, "entityMgr");
+        this.direction = Objects.requireNonNull(direction, "direction");
+        this.random = Objects.requireNonNull(random, "random");
     }
 
     @Override
@@ -79,11 +81,9 @@ public class AttackAction implements Action {
         return hitAny ? ActionResult.DAMAGE : ActionResult.SUCCESS;
     }
 
-    /** 敌人单体攻击：向direction方向攻击，只命中相邻格的目标。 */
+    /** 敌人单体攻击：先朝攻击方向转向（即使没有命中也更新），再结算相邻格目标。 */
     private ActionResult executeEnemyAttack(Enemy enemy) {
-        if (direction == null) {
-            return ActionResult.BLOCKED;
-        }
+        enemy.setFacing(Facing.fromDirection(direction));
 
         Position targetPos = new Position(
                 enemy.getPosition().x + direction.dx,

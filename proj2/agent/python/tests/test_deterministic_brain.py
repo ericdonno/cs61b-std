@@ -129,6 +129,7 @@ class DeterministicAgentTest(unittest.TestCase):
             "schemaVersion": ENVELOPE_VERSION,
             "messageId": f"java-{message_type}",
             "messageSeq": 0,
+            "worldId": "world-test",
             "runId": "agent-test",
             "floorId": 1,
             "agentId": "guard-a",

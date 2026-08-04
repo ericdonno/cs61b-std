@@ -1,5 +1,7 @@
 package byog.Perception;
 
+import byog.Common.Facing;
+import byog.Common.VisionMode;
 import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
 import byog.lab5.Position;
@@ -12,6 +14,7 @@ import java.util.List;
  * 单个敌人、单个 tick 的私有感知结果。不可变。
  */
 public final class ObservationEnvelope {
+    private final String worldId;
     private final String runId;
     private final int floorId;
     private final String agentId;
@@ -19,6 +22,9 @@ public final class ObservationEnvelope {
     private final long observedAtTurn;
     private final Position selfPosition;
     private final int selfHp;
+    private final int selfMaxHp;
+    private final Facing selfFacing;
+    private final VisionMode visionMode;
     private final boolean[][] visibleMask;
     private final boolean[][] walkableMask;
     private final List<VisibleEntity> visibleEntities;
@@ -26,14 +32,17 @@ public final class ObservationEnvelope {
     private final List<VisibleTile> visibleTiles;
 
     /** 包内可见，由 PerceptionSystem 创建 */
-    ObservationEnvelope(String runId, int floorId, String agentId,
-                        long observationSeq, long observedAtTurn,
-                        Position selfPosition, int selfHp,
+    ObservationEnvelope(String worldId, String runId, int floorId,
+                        String agentId, long observationSeq,
+                        long observedAtTurn,
+                        Position selfPosition, int selfHp, int selfMaxHp,
+                        Facing selfFacing, VisionMode visionMode,
                         boolean[][] visibleMask,
                         List<VisibleEntity> visibleEntities,
                         List<HeardEvent> heardEvents,
                         List<VisibleTile> visibleTiles,
                         TETile[][] world) {
+        this.worldId = worldId;
         this.runId = runId;
         this.floorId = floorId;
         this.agentId = agentId;
@@ -41,6 +50,9 @@ public final class ObservationEnvelope {
         this.observedAtTurn = observedAtTurn;
         this.selfPosition = copyPosition(selfPosition);
         this.selfHp = selfHp;
+        this.selfMaxHp = selfMaxHp;
+        this.selfFacing = selfFacing;
+        this.visionMode = visionMode;
         this.visibleMask = copyMask(visibleMask);
         this.walkableMask = buildWalkableMask(this.visibleMask, world);
         this.visibleEntities = Collections.unmodifiableList(
@@ -49,6 +61,10 @@ public final class ObservationEnvelope {
                 new ArrayList<>(heardEvents));
         this.visibleTiles = Collections.unmodifiableList(
                 new ArrayList<>(visibleTiles));
+    }
+
+    public String getWorldId() {
+        return worldId;
     }
 
     public String getRunId() {
@@ -77,6 +93,21 @@ public final class ObservationEnvelope {
 
     public int getSelfHp() {
         return selfHp;
+    }
+
+    /** 自身最大生命值，供未来 Agent 计算生命比例。 */
+    public int getSelfMaxHp() {
+        return selfMaxHp;
+    }
+
+    /** 生成该观察时的敌人朝向。 */
+    public Facing getSelfFacing() {
+        return selfFacing;
+    }
+
+    /** 生成该观察时的视野模式。 */
+    public VisionMode getVisionMode() {
+        return visionMode;
     }
 
     public boolean[][] getVisibleMask() {

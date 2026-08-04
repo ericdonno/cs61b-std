@@ -43,6 +43,10 @@ public final class VisibleTile {
         if (tile == Tileset.STAIRS) {
             return TileType.STAIRS;
         }
+        // 苹果是玩家可见的地图资源，但对 Agent 等价于地板：wire 中永不出现 APPLE。
+        if (tile == Tileset.APPLE) {
+            return TileType.FLOOR;
+        }
         if (tile == Tileset.NOTHING) {
             return TileType.NOTHING;
         }
