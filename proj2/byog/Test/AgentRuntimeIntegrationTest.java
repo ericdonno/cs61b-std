@@ -105,6 +105,45 @@ public class AgentRuntimeIntegrationTest {
     }
 
     @Test
+    public void scriptedGraphIntentPassesJavaAuthorityAndCommitsAction()
+            throws Exception {
+        try (RuntimeProcess runtime = RuntimeProcess.start(
+                "normal", 0, 0.0, "scripted");
+             GameFixture fixture = new GameFixture(1)) {
+            AgentSession session = fixture.attachSession(
+                    fixture.enemies.get(0), runtime.port,
+                    1000, 5000);
+            awaitConnected(session);
+
+            fixture.prime(0);
+            await(() -> session.getInboundQueueSize() > 0,
+                    "scripted graph returned no intent");
+            fixture.tick(1);
+
+            Enemy enemy = fixture.enemies.get(0);
+            IntentLease lease = enemy.getArbiter().getCurrentLease();
+            assertNotNull(lease);
+            assertNotNull(lease.getIntent().getPlanMetadata());
+            assertEquals("PATROL", lease.getIntent().getSkillId());
+            assertEquals(AgentProtocol.DecisionSource.REMOTE_AGENT,
+                    lease.getDecisionSource());
+            assertNotNull(enemy.getLastActionOutcome());
+            assertEquals(AgentProtocol.DecisionSource.REMOTE_AGENT,
+                    enemy.getLastActionOutcome().getDecisionSource());
+
+            AgentTrace.TraceEvent adopted = fixture.traceSink.events()
+                    .stream()
+                    .filter(event -> event.eventType
+                            == AgentTrace.EventType.INTENT_ADOPTED)
+                    .findFirst().orElseThrow();
+            assertEquals("PATROL", adopted.skillId);
+            assertNotNull(adopted.planId);
+            assertEquals(AgentTrace.AGENT_RUNTIME_TRACE_VERSION,
+                    adopted.schemaVersion);
+        }
+    }
+
+    @Test
     public void twoEnemyConnectionsKeepIndependentIdentity() throws Exception {
         try (RuntimeProcess runtime = RuntimeProcess.start("normal", 0, 0.0);
              GameFixture fixture = new GameFixture(2)) {
@@ -558,12 +597,19 @@ public class AgentRuntimeIntegrationTest {
         private static RuntimeProcess start(
                 String mode, int requestedPort, double delaySeconds)
                 throws Exception {
+            return start(mode, requestedPort, delaySeconds, "deterministic");
+        }
+
+        private static RuntimeProcess start(
+                String mode, int requestedPort, double delaySeconds,
+                String brain) throws Exception {
             ProcessBuilder builder = new ProcessBuilder(
                     System.getProperty("dungeonmind.python", "python"),
                     "agent/python/run.py",
                     "--host", "127.0.0.1",
                     "--port", Integer.toString(requestedPort),
                     "--mode", mode,
+                    "--brain", brain,
                     "--delay-seconds", Double.toString(delaySeconds));
             builder.directory(new File(".").getCanonicalFile());
             builder.redirectErrorStream(true);

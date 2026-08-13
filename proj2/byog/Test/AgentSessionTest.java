@@ -836,12 +836,15 @@ public class AgentSessionTest {
             AgentProtocol.IntentData intent =
                     new AgentProtocol.IntentData(
                             AgentProtocol.INTENT_VERSION,
-                            AgentProtocol.Skill.PATROL,
+                            "PATROL",
                             Collections.emptyMap(),
                             0.75,
                             10,
                             new AgentProtocol.InterruptPolicyData(
-                                    true, true, true));
+                                    true, true, true),
+                            new AgentProtocol.PlanMetadataData(
+                                    observation.decisionId() + ":plan",
+                                    "intent-0", 0));
             AgentProtocol.SubmitIntentData data =
                     new AgentProtocol.SubmitIntentData(
                             observation.decisionId(),

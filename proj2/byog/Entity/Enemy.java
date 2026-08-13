@@ -17,6 +17,7 @@ import byog.AI.IntentArbiter;
 import byog.AI.IntentLease;
 import byog.AI.PatrolController;
 import byog.AI.PatrolState;
+import byog.AI.PlanMetadata;
 import byog.AI.ReflexController;
 import byog.AI.ReflexObservation;
 import byog.AI.RuleBasedBrain;
@@ -479,15 +480,15 @@ public class Enemy extends Entity {
 
                 if (!lease.getDecisionId().equals(queuedDecisionId)) {
                     currentStrategy = leaseIntent.getStrategy();
-                    List<Action> actions = ClassicalPlanner.translateBounded(
-                            leaseIntent, getPosition(), getId(), world,
-                            entityMgr, random, actionQueue.getHighWater());
+                    List<Action> actions = planLeaseBounded(
+                            lease, world, entityMgr,
+                            actionQueue.getHighWater());
                     actionQueue.replaceWithBoundedPrefix(actions);
                     queuedDecisionId = lease.getDecisionId();
                 } else if (actionQueue.needRefill()) {
-                    List<Action> actions = ClassicalPlanner.translateBounded(
-                            leaseIntent, getPosition(), getId(), world,
-                            entityMgr, random, actionQueue.remainingCapacity());
+                    List<Action> actions = planLeaseBounded(
+                            lease, world, entityMgr,
+                            actionQueue.remainingCapacity());
                     actionQueue.appendBounded(actions);
                 }
 
@@ -567,6 +568,8 @@ public class Enemy extends Entity {
                                 .observationSequence(
                                         latestObservation.getObservationSeq())
                                 .decision(decisionId, source.name())
+                                .plan(planSkillId(source), planId(source),
+                                        planStepId(source), planRevision(source))
                                 .override(overrideReason)
                                 .execution(decision.getLevel().name())
                                 .facingChange(beforeFacing,
@@ -686,6 +689,15 @@ public class Enemy extends Entity {
                                             committedObservation
                                                     .getObservationSeq())
                                     .execution("COMMITTED")
+                                    .plan(planSkillId(
+                                                    completedOutcome
+                                                            .getDecisionSource()),
+                                            planId(completedOutcome
+                                                    .getDecisionSource()),
+                                            planStepId(completedOutcome
+                                                    .getDecisionSource()),
+                                            planRevision(completedOutcome
+                                                    .getDecisionSource()))
                                     .action(completedOutcome),
                             agentSession));
         }
@@ -925,6 +937,10 @@ public class Enemy extends Entity {
                                         data.decisionId(),
                                         AgentProtocol.DecisionSource
                                                 .REMOTE_AGENT.name())
+                                .plan(data.intent().skill(),
+                                        data.intent().planMetadata().planId(),
+                                        data.intent().planMetadata().stepId(),
+                                        data.intent().planMetadata().revision())
                                 .message(AgentProtocol.MessageType
                                         .SUBMIT_INTENT.name())
                                 .validation(result.name());
@@ -1152,6 +1168,50 @@ public class Enemy extends Entity {
                 intent, getPosition(), getId(), world,
                 entityMgr, random, 1);
         return actions.isEmpty() ? null : actions.get(0);
+    }
+
+    private List<Action> planLeaseBounded(
+            IntentLease lease, TETile[][] world,
+            EntityManager entityManager, int maxActions) {
+        if (lease.getDecisionSource()
+                == AgentProtocol.DecisionSource.REMOTE_AGENT) {
+            return arbiter.planRemoteBounded(
+                    lease.getIntent(), getPosition(), getId(), world,
+                    entityManager, random, maxActions);
+        }
+        return ClassicalPlanner.translateBounded(
+                lease.getIntent(), getPosition(), getId(), world,
+                entityManager, random, maxActions);
+    }
+
+    private PlanMetadata activeRemotePlan(
+            AgentProtocol.DecisionSource source) {
+        if (source != AgentProtocol.DecisionSource.REMOTE_AGENT) {
+            return null;
+        }
+        IntentLease lease = arbiter.getCurrentLease();
+        return lease == null ? null : lease.getIntent().getPlanMetadata();
+    }
+
+    private String planSkillId(AgentProtocol.DecisionSource source) {
+        IntentLease lease = arbiter.getCurrentLease();
+        return source == AgentProtocol.DecisionSource.REMOTE_AGENT
+                && lease != null ? lease.getIntent().getSkillId() : null;
+    }
+
+    private String planId(AgentProtocol.DecisionSource source) {
+        PlanMetadata metadata = activeRemotePlan(source);
+        return metadata == null ? null : metadata.planId();
+    }
+
+    private String planStepId(AgentProtocol.DecisionSource source) {
+        PlanMetadata metadata = activeRemotePlan(source);
+        return metadata == null ? null : metadata.stepId();
+    }
+
+    private Integer planRevision(AgentProtocol.DecisionSource source) {
+        PlanMetadata metadata = activeRemotePlan(source);
+        return metadata == null ? null : metadata.revision();
     }
 
     /**

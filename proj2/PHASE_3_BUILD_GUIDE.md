@@ -137,7 +137,7 @@ Python 必须尽力取消 queued work；running call 若无法中止，仍占用
 | 3.5 | Step 3.5 | 有界 Tool Calling graph |
 | 3.6 | Step 3.6 | reader/task/emitter 取消链 |
 | 3.7 | Step 3.7 | 全局 inference scheduler 与预算 |
-| 3.8 | Step 3.8 | OpenAI adapter 与 model trace |
+| 3.8 | Step 3.8 | provider-neutral adapter contract 与 model trace |
 | 3.9 | Step 3.9 | 生产接线、完整回归、真实 smoke 与 Completion |
 
 下图只表达阶段依赖；每个阶段的“阶段闸门”决定是否可以继续。
@@ -151,7 +151,7 @@ flowchart TD
     A --> F["3.6 reader/task/emitter 取消链"]
     E --> F
     F --> G["3.7 全局 scheduler + 预算"]
-    G --> H["3.8 OpenAI adapter + runtime trace"]
+    G --> H["3.8 adapter contract + runtime trace"]
     C --> I["3.9 Java/Python 端到端接线与交接"]
     H --> I
 ```
@@ -184,7 +184,7 @@ python -m venv agent/python/.venv
 
 ```powershell
 & agent/python/.venv/Scripts/python.exe -c `
-    "import langgraph, langchain, langchain_openai, pydantic; print('imports-ok')"
+    "import langgraph, langchain, pydantic; print('imports-ok')"
 & agent/python/.venv/Scripts/python.exe -m pip list
 ```
 
@@ -617,30 +617,23 @@ Scripted provider 使用 `threading.Event`/barrier：前两个 call 进入后阻
 - queue full 立即返回，connection reader 可继续工作。
 - 双 Agent prompt capture 无交叉内容。
 
-## 3.8 接入 OpenAI adapter 与 runtime trace
+## 3.8 固定 provider-neutral adapter contract 与 runtime trace
 
 Deterministic graph、取消和预算边界全部通过后，具体 provider 只需适配统一 `ModelAdapter`，不会渗入 Agent state 或 Session。
 
 ### 3.8.1 ModelAdapter 先于具体 provider
 
 `model/adapter.py` 定义统一输入、输出、usage 和错误分类。Graph 只依赖 adapter，不 import
-`ChatOpenAI`。`openai_adapter.py` 负责：
-
-- 从已验证 config 取得 model ID；
-- 从环境取得 `OPENAI_API_KEY`；
-- 绑定五个工具 schema；
-- 设置输出 token 上限、timeout 和最多一次明确 transient retry；
-- 把 LangChain message/tool_calls/usage 转成内部 DTO；
-- 不记录 authorization、raw prompt、raw response 或 reasoning。
-
-模型 ID 不写死。启动示例使用 `<model-id>` 占位符；Completion 记录实际 smoke 使用的精确 ID。
+任何具体 provider SDK。`adapter.py` 固定调用、usage、错误分类与取消语义；scripted adapter 负责默认验收。
+具体 SDK、模型 ID、鉴权环境变量和 tool binding 由 Builder 后续配置时增加，不能渗入 graph、Session
+或 Java validator。
 
 ### 3.8.2 ready 前校验
 
 `--brain model` 时，在绑定端口和输出 ready 之前检查：
 
-- model ID 非空；
-- `OPENAI_API_KEY` 存在但不打印；
+- provider adapter 与 model ID 已显式配置；
+- provider 所需凭据存在但不打印；
 - checkpoint path 可创建/打开；
 - runtime trace path 可创建；
 - 所有上限为正且关系合法；
@@ -668,14 +661,14 @@ canonical evidence 或提交文件。
 
 ### 3.8 阶段闸门
 
-- 无 key/model 时 model 模式不输出 ready，deterministic 模式仍正常。
+- provider/model 未配置时 model 模式不输出 ready，deterministic 与 scripted 模式仍正常。
 - `TRACE-CORRELATION-01–04` 使用 scripted model 通过。
 - Trace 中搜索不到 API key、authorization、raw prompt 或其他 Agent 数据。
 - Provider adapter error 能被分类为 transient/permanent/timeout/cancelled，不泄露 provider response body。
 
 ## 3.9 生产接线、回归与交接
 
-最后把已经独立验证的 v2、registry、graph、scheduler 和 provider seam 接入真实 Java/Python 闭环，再运行显式 smoke 并形成 Completion。
+最后把已经独立验证的 v2、registry、graph、scheduler 和 provider seam 接入真实 Java/Python 闭环并形成 Completion。
 
 ### 3.9.1 Python 到 Java 的路径不新建第二条通信
 
@@ -706,7 +699,7 @@ Registry 的 `planBounded()` 返回前缀，`Enemy.executeOneAction()` 每次冷
 
 ### 3.9.4 建立端到端 scripted integration
 
-新 `ModelRuntimeIntegrationTest` 使用真实 Python 子进程和 TCP，但 adapter 是 scripted：
+`AgentRuntimeIntegrationTest` 使用真实 Python 子进程和 TCP，并增加 scripted adapter 场景：
 
 1. Java 发送含 `worldId`、`hp/maxHp`、朝向与 `visionMode` 的 Observation v2；
 2. Python trace 证明两次 model call 与至少一个 evidence tool；
@@ -720,32 +713,25 @@ Registry 的 `planBounded()` 返回前缀，`Enemy.executeOneAction()` 每次冷
 
 ### 3.9.5 自动化接线闸门
 
-- `MODEL-SMOKE-01` 之外的全部自动化 matrix 通过。
+- provider smoke 之外的全部自动化 matrix 通过。
 - v2 accepted/rejected 都不会改变 Session 状态机语义。
 - bridge disabled 不构建 provider/scheduler 调用。
 - Phase 2.5 Completion 记录的 normal/delay/malformed/disconnect/no-read 与 gameplay 回归通过。
 
-### 3.9.6 理解真实模型 smoke 的目的
+### 3.9.6 延后真实 provider smoke
 
-Scripted integration 证明控制流正确；真实 smoke 证明当前 provider、模型和 tool calling API 实际兼容。
-它不是行为质量评测，也不要求模型每次选择同一 tile。
+Scripted integration 证明控制流正确。Builder 已裁决实际 API/provider 后续自行配置；实现完成时必须提醒
+Builder，再用一次有界 smoke 证明其 provider、模型和 tool calling API 实际兼容。未配置前记为未验证，
+不阻断本阶段的确定性代码交付，也不得伪造真实 provider 证据。
 
 ### 3.9.7 安全准备
 
-- API key 只在进程环境中提供，不写入命令、properties、`.env` 提交或 trace。
+- 凭据只在进程环境中提供，不写入命令、properties、`.env` 提交或 trace。
 - 设置显式 model ID、一次决策、8 秒以内 graph deadline、512 output tokens 和小 encounter budget。
 - 使用固定单守卫 headless observation，内容不含真实用户数据。
 - 启动前确认 Java hard deadline 大于 Python decision timeout。
 
-运行入口：
-
-```powershell
-$env:DUNGEONMIND_MODEL = "<explicit-model-id>"
-& agent/python/.venv/Scripts/python.exe agent/python/model_smoke.py `
-    --model $env:DUNGEONMIND_MODEL
-```
-
-本指南不要求在命令中设置或回显 API key。运行者在自己的安全环境中提供 `OPENAI_API_KEY`。
+实际运行入口由后续 provider adapter 文档定义。本指南不猜测 Builder 的 API 协议、鉴权变量或模型 ID。
 
 ### 3.9.8 smoke 只断言稳定事实
 
@@ -777,9 +763,9 @@ $env:DUNGEONMIND_MODEL = "<explicit-model-id>"
 
 ### 3.9 阶段闸门
 
-- `MODEL-SMOKE-01` 与 Spec 11.2–11.5 的自动化矩阵全部通过。
-- 下文“验证命令”中的默认 gate、scripted integration、Socket 回归和显式真实 smoke 得到记录。
-- `PHASE_3_COMPLETION.md` 明确记录真实 model ID、预算、trace 关联、偏差与 Phase 4 交接。
+- Spec 11.2–11.5 的自动化矩阵（延后 provider smoke 除外）全部通过。
+- 下文“验证命令”中的默认 gate、scripted integration 和 Socket 回归得到记录。
+- `PHASE_3_COMPLETION.md` 明确记录 provider 未配置、预算、trace 关联、偏差与 Phase 4 交接。
 - 未满足任何一项时不得关闭 Phase 3，也不得把缺失证据写成 Accepted。
 
 ## 文件导航
@@ -795,10 +781,9 @@ $env:DUNGEONMIND_MODEL = "<explicit-model-id>"
 7. `dungeonmind_agent/graph/workflow.py`
 8. `dungeonmind_agent/graph/tools.py`
 9. `dungeonmind_agent/model/scheduler.py`
-10. `dungeonmind_agent/model/openai_adapter.py`
-11. `dungeonmind_agent/checkpoint.py`
-12. `dungeonmind_agent/observability.py`
-13. `dungeonmind_agent/protocol.py`
+10. `dungeonmind_agent/checkpoint.py`
+11. `dungeonmind_agent/observability.py`
+12. `dungeonmind_agent/protocol.py`
 
 ### Java 最短阅读顺序
 
@@ -818,7 +803,7 @@ $env:DUNGEONMIND_MODEL = "<explicit-model-id>"
 
 ## 验证命令
 
-阶段 3.9 按以下顺序执行。真实 smoke 不进入默认 CI，只有显式提供凭据和 model ID 时运行。
+阶段 3.9 按以下顺序执行。真实 provider smoke 等 Builder 后续配置实际 API 后单独运行。
 
 ```powershell
 # 1. Python contracts
@@ -838,16 +823,14 @@ java "-Dfile.encoding=UTF-8" `
 # 4. 真实 Python/TCP + scripted model integration
 java "-Dfile.encoding=UTF-8" `
     -cp "out;..\library-sp18\javalib\*" `
-    org.junit.runner.JUnitCore byog.Test.ModelRuntimeIntegrationTest
+    org.junit.runner.JUnitCore byog.Test.AgentRuntimeIntegrationTest
 
 # 5. 原 SocketTransport 独立入口
 java "-Dfile.encoding=UTF-8" `
     -cp "out;..\library-sp18\javalib\*" `
     org.junit.runner.JUnitCore byog.Bridge.SocketTransportTest
 
-# 6. 显式凭据化真实 smoke
-& agent/python/.venv/Scripts/python.exe agent/python/model_smoke.py `
-    --model $env:DUNGEONMIND_MODEL
+# 6. 真实 provider smoke：待 Builder 配置实际 API/adapter 后按其文档执行
 ```
 
 ## 出问题时先看这里
@@ -901,7 +884,7 @@ java "-Dfile.encoding=UTF-8" `
 
 - [ ] 默认 deterministic gate leaf-only、无重复、成功输出简洁。
 - [ ] 真实进程 integration 有界关闭，不遗留 Python 进程或监听端口。
-- [ ] credentialed smoke 记录 model/tool/token/latency/validation/action 证据。
+- [ ] scripted integration 记录 model/tool/token/latency/validation/action 证据；真实 provider 证据待配置后补充。
 - [ ] `agent-model.trace.v1` 与 `agent-runtime.trace.v3` 可关联，且无 API key、raw prompt、raw response 或自由 reasoning。
 - [ ] `PHASE_3_COMPLETION.md` 已记录实际结果、偏差、commit 与 Phase 4 输入。
 

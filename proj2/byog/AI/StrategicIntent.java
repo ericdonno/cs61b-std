@@ -20,6 +20,8 @@ public class StrategicIntent {
     private final Position targetPosition;
     private final double confidence;
     private final int targetRoom;
+    private final String skillId;
+    private final PlanMetadata planMetadata;
 
     public StrategicIntent(Goal goal, Strategy strategy, Position targetPosition) {
         this(goal, strategy, targetPosition, 0.5, -1);
@@ -27,11 +29,20 @@ public class StrategicIntent {
 
     public StrategicIntent(Goal goal, Strategy strategy, Position targetPosition,
                            double confidence, int targetRoom) {
+        this(goal, strategy, targetPosition, confidence, targetRoom,
+                strategy.name(), null);
+    }
+
+    public StrategicIntent(Goal goal, Strategy strategy, Position targetPosition,
+                           double confidence, int targetRoom,
+                           String skillId, PlanMetadata planMetadata) {
         this.goal = goal;
         this.strategy = strategy;
         this.targetPosition = targetPosition;
         this.confidence = confidence;
         this.targetRoom = targetRoom;
+        this.skillId = skillId;
+        this.planMetadata = planMetadata;
     }
 
     public Goal getGoal() {
@@ -52,5 +63,13 @@ public class StrategicIntent {
 
     public int getTargetRoom() {
         return targetRoom;
+    }
+
+    public String getSkillId() {
+        return skillId;
+    }
+
+    public PlanMetadata getPlanMetadata() {
+        return planMetadata;
     }
 }

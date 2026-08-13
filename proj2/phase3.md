@@ -97,7 +97,7 @@ flowchart TD
     A --> F["3.6 取消与有序响应"]
     E --> F
     F --> G["3.7 全局推理调度与预算"]
-    G --> H["3.8 OpenAI 适配器与追踪"]
+    G --> H["3.8 通用适配器契约与追踪"]
     C --> I["3.9 生产接线与验收"]
     H --> I
 ```
@@ -395,7 +395,7 @@ prepare_context
 - 双敌人提示词捕获中不存在交叉内容。
 - 并发测试使用事件或屏障（barrier），不使用固定休眠猜测时序。
 
-## 3.8 接入 OpenAI 适配器与运行时追踪
+## 3.8 固定通用适配器契约与运行时追踪
 
 ### 目标
 
@@ -405,26 +405,19 @@ prepare_context
 
 ### 改动位置
 
-- 新建 `model/adapter.py` 和 `model/openai_adapter.py`。
+- 新建 `model/adapter.py`；具体 provider adapter 由 Builder 后续配置。
 - 新建 `observability.py`。
 - 修改配置、启动入口与就绪消息（ready message）。
 
 ### 模型适配器
 
-状态图只依赖统一适配接口，不能直接导入 `ChatOpenAI`（OpenAI 聊天模型客户端）。OpenAI 适配器负责：
-
-- 从已校验配置取得模型标识；
-- 从环境读取 `OPENAI_API_KEY`，但不打印或持久化；
-- 绑定五个工具的结构；
-- 设置输出上限、超时和至多一次明确的暂时性错误（transient error）重试；
-- 将消息、工具调用和用量转换为内部数据对象；
-- 将错误分为暂时错误、永久错误（permanent error）、超时和取消。
-
-模型标识不得写死，也不能使用浮动的 `latest` 别名作为验收基线。
+状态图只依赖统一适配接口，不能直接导入任何具体 provider SDK。通用接口固定模型调用、工具调用、
+用量、错误分类与取消语义；scripted adapter 用于默认验收。具体 SDK、模型标识、鉴权变量和 tool binding
+由 Builder 后续配置，不能渗入 graph、Session 或 Java validator。
 
 ### 启动前校验
 
-模型模式在绑定端口和输出就绪消息前，必须确认：模型标识非空、密钥存在、检查点与追踪路径可用、
+模型模式在绑定端口和输出就绪消息前，必须确认：provider adapter 与模型标识已配置、所需凭据存在、检查点与追踪路径可用、
 各项上限合法，并且 Python 决策超时小于 Java 硬截止时间。失败时以非零状态退出并给出不含密钥的原因；
 不得悄悄切回确定性模式。
 
@@ -447,7 +440,7 @@ prepare_context
 
 ### 阶段闸门
 
-- 模型模式缺少模型标识或密钥时不会输出就绪消息；确定性模式仍可正常启动。
+- 模型模式缺少 provider 配置时不会输出就绪消息；确定性与 scripted 模式仍可正常启动。
 - Spec `TRACE-CORRELATION-01–04` 使用脚本化模型全部通过。
 - 追踪中没有密钥、授权信息、原始提示词或其他敌人的数据。
 - 适配器能稳定分类错误，并且不泄露模型服务的原始响应正文。
@@ -457,7 +450,7 @@ prepare_context
 ### 目标
 
 把前面已经独立验证的协议、技能注册表、状态图、调度器和模型适配器接入现有 Java/Python 链路，
-完成确定性回归、真实进程集成测试（integration test）和一次显式凭据化冒烟测试（smoke test）。
+完成确定性回归和真实进程 scripted integration；真实 provider smoke 等 Builder 后续配置 API 后执行。
 
 ### 生产数据流
 
@@ -480,7 +473,7 @@ Java 追踪格式升级为 `agent-runtime.trace.v3`，用 `worldId / runId / flo
 
 ### 脚本化端到端测试
 
-`ModelRuntimeIntegrationTest`（模型运行时集成测试）启动真实 Python 子进程并通过 TCP 通信，
+`AgentRuntimeIntegrationTest`（Agent 运行时集成测试）启动真实 Python 子进程并通过 TCP 通信，
 但使用脚本化模型。它至少证明：
 
 1. Java 发送包含世界身份、自身生命值、朝向和视野模式的私有观察。
@@ -493,12 +486,12 @@ Java 追踪格式升级为 `agent-runtime.trace.v3`，用 `worldId / runId / flo
 
 测试必须使用系统分配端口、分段等待与总超时，并且只关闭自己创建的子进程。
 
-### 真实模型冒烟测试
+### 真实 provider 冒烟测试（延后）
 
-脚本化测试证明控制流正确；真实模型冒烟测试只证明当前模型服务、模型标识与工具调用接口兼容。
+脚本化测试证明控制流正确；真实模型冒烟测试只证明后续配置的模型服务、模型标识与工具调用接口兼容。
 它不是行为质量评测，也不应断言自然语言或完整轨迹与固定答案完全相同。
 
-真实冒烟测试必须满足：
+Builder 配置实际 API 后，真实冒烟测试必须满足：
 
 - 密钥只通过进程环境提供。
 - 使用明确模型标识、单次决策、短截止时间、小输出上限和小遭遇预算。
@@ -511,8 +504,8 @@ Java 追踪格式升级为 `agent-runtime.trace.v3`，用 `worldId / runId / flo
 
 - Spec 11.2–11.5 的自动化矩阵全部通过。
 - 旧确定性故障模式、网络传输、游戏行为和禁用 Bridge 的回归通过。
-- 真实模型冒烟测试成功，且 Python 与 Java 追踪可以关联。
-- 只有所有门禁都有实际证据时，才编写 `PHASE_3_COMPLETION.md` 并关闭本阶段。
+- scripted integration 成功且 Python 与 Java 追踪可以关联；真实 provider smoke 明确标记等待配置。
+- 只有全部确定性门禁都有实际证据时，才编写 `PHASE_3_COMPLETION.md`；不得伪造真实 provider 证据。
 
 ## 文件阅读顺序
 
@@ -527,10 +520,9 @@ Java 追踪格式升级为 `agent-runtime.trace.v3`，用 `worldId / runId / flo
 7. `agent/python/dungeonmind_agent/graph/workflow.py`
 8. `agent/python/dungeonmind_agent/graph/tools.py`
 9. `agent/python/dungeonmind_agent/model/scheduler.py`
-10. `agent/python/dungeonmind_agent/model/openai_adapter.py`
-11. `agent/python/dungeonmind_agent/checkpoint.py`
-12. `agent/python/dungeonmind_agent/observability.py`
-13. `agent/python/dungeonmind_agent/protocol.py`
+10. `agent/python/dungeonmind_agent/checkpoint.py`
+11. `agent/python/dungeonmind_agent/observability.py`
+12. `agent/python/dungeonmind_agent/protocol.py`
 
 ### Java
 
@@ -550,7 +542,7 @@ Java 追踪格式升级为 `agent-runtime.trace.v3`，用 `worldId / runId / flo
 
 ## 最终验证命令
 
-以下命令只在阶段 3.9 执行。真实模型冒烟测试不进入默认持续集成（Continuous Integration, CI）。
+以下命令只在阶段 3.9 执行。真实 provider 冒烟测试等待 Builder 后续配置实际 API。
 
 ```powershell
 # Python 契约与单元测试
@@ -570,16 +562,14 @@ java "-Dfile.encoding=UTF-8" `
 # 真实 Python 进程与脚本化模型集成测试
 java "-Dfile.encoding=UTF-8" `
     -cp "out;..\library-sp18\javalib\*" `
-    org.junit.runner.JUnitCore byog.Test.ModelRuntimeIntegrationTest
+    org.junit.runner.JUnitCore byog.Test.AgentRuntimeIntegrationTest
 
 # 套接字传输独立回归
 java "-Dfile.encoding=UTF-8" `
     -cp "out;..\library-sp18\javalib\*" `
     org.junit.runner.JUnitCore byog.Bridge.SocketTransportTest
 
-# 显式凭据化真实模型冒烟测试
-& agent/python/.venv/Scripts/python.exe agent/python/model_smoke.py `
-    --model $env:DUNGEONMIND_MODEL
+# 真实 provider smoke：待 Builder 配置实际 API/adapter 后按其文档执行
 ```
 
 ## 故障定位
@@ -626,7 +616,7 @@ java "-Dfile.encoding=UTF-8" `
 
 - [ ] 默认测试不访问真实付费模型、不打开图形界面、不写默认玩家存档，也不依赖固定休眠判断时序。
 - [ ] 真实进程集成测试有总超时并能清理自己创建的子进程和端口。
-- [ ] 真实模型冒烟测试记录模型、工具、令牌、延迟、校验和动作证据。
+- [ ] scripted integration 记录模型、工具、令牌、延迟、校验和动作证据；真实 provider 证据待配置后补充。
 - [ ] Python 与 Java 追踪可以按身份、决策和计划关联。
 - [ ] 追踪中没有密钥、授权信息、完整提示词、完整模型响应或自由推理。
 - [ ] `PHASE_3_COMPLETION.md` 只记录实际执行结果、偏差和最终交接，不把计划命令当成完成证据。

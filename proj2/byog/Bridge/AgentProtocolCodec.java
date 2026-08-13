@@ -18,6 +18,10 @@ public final class AgentProtocolCodec {
 
     public static final int DEFAULT_MAX_FRAME_BYTES = 65536;
     public static final int DEFAULT_MAX_DEPTH = 16;
+    public static final int MAX_PARAMETER_DEPTH = 8;
+    public static final int MAX_OBJECT_KEYS = 64;
+    public static final int MAX_ARRAY_ITEMS = 64;
+    public static final int MAX_STRING_CHARS = 1024;
 
     private AgentProtocolCodec() {
     }
@@ -638,7 +642,8 @@ public final class AgentProtocolCodec {
         UNKNOWN_PARAMETER,
         UNKNOWN_FIELD,
         UNKNOWN_EVENT_TYPE,
-        UNKNOWN_PAYLOAD_VERSION
+        UNKNOWN_PAYLOAD_VERSION,
+        PARAMETER_LIMIT_EXCEEDED
     }
 
     public record ProtocolFailure(FailureReason reason, String detail) {
@@ -817,11 +822,12 @@ public final class AgentProtocolCodec {
     private static JsonValue encodeIntent(AgentProtocol.IntentData intent) {
         JsonObject obj = new JsonObject(new LinkedHashMap<>());
         obj.members().put("intentVersion", new JsonString(intent.intentVersion()));
-        obj.members().put("skill", new JsonString(intent.skill().name()));
+        obj.members().put("skill", new JsonString(intent.skill()));
         obj.members().put("parameters", encodeParameters(intent.parameters()));
         obj.members().put("confidence", new JsonNumber(intent.confidence(), false));
         obj.members().put("validForTicks", new JsonNumber(intent.validForTicks(), true));
         obj.members().put("interruptPolicy", encodeInterruptPolicy(intent.interruptPolicy()));
+        obj.members().put("planMetadata", encodePlanMetadata(intent.planMetadata()));
         return obj;
     }
 
@@ -856,10 +862,34 @@ public final class AgentProtocolCodec {
         if (o instanceof String s) {
             return new JsonString(s);
         }
-        if (o instanceof AgentProtocol.PositionData p) {
-            return encodePosition(p);
+        if (o instanceof Map<?, ?> map) {
+            JsonObject object = new JsonObject(new LinkedHashMap<>());
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (!(entry.getKey() instanceof String key)) {
+                    throw new IllegalArgumentException(
+                            "JSON object key must be string");
+                }
+                object.members().put(key, encodeObject(entry.getValue()));
+            }
+            return object;
+        }
+        if (o instanceof List<?> list) {
+            List<JsonValue> values = new ArrayList<>();
+            for (Object item : list) {
+                values.add(encodeObject(item));
+            }
+            return new JsonArray(values);
         }
         throw new IllegalArgumentException("unsupported parameter type: " + o.getClass());
+    }
+
+    private static JsonValue encodePlanMetadata(
+            AgentProtocol.PlanMetadataData metadata) {
+        JsonObject obj = new JsonObject(new LinkedHashMap<>());
+        obj.members().put("planId", new JsonString(metadata.planId()));
+        obj.members().put("stepId", new JsonString(metadata.stepId()));
+        obj.members().put("revision", new JsonNumber(metadata.revision(), true));
+        return obj;
     }
 
     private static JsonValue encodeInterruptPolicy(AgentProtocol.InterruptPolicyData p) {
@@ -1182,7 +1212,7 @@ public final class AgentProtocolCodec {
     private static IntentDecodeResult decodeIntent(JsonObject obj) {
         ensureOnlyFields(obj, "intent",
                 "intentVersion", "skill", "parameters", "confidence",
-                "validForTicks", "interruptPolicy");
+                "validForTicks", "interruptPolicy", "planMetadata");
         String intentVersion = requireString(obj, "intentVersion");
         if (intentVersion == null) {
             return intentFailure(FailureReason.MISSING_REQUIRED, "intentVersion");
@@ -1195,33 +1225,13 @@ public final class AgentProtocolCodec {
         if (skillStr == null) {
             return intentFailure(FailureReason.MISSING_REQUIRED, "skill");
         }
-        AgentProtocol.Skill skill;
-        try {
-            skill = AgentProtocol.Skill.valueOf(skillStr);
-        } catch (IllegalArgumentException e) {
+        if (!skillStr.matches("[A-Z][A-Z0-9_]{0,63}")) {
             return intentFailure(FailureReason.UNKNOWN_SKILL, "skill: " + skillStr);
         }
         JsonObject paramsObj = requireObject(obj, "parameters");
-        Map<String, Object> params = new LinkedHashMap<>();
-        for (Map.Entry<String, JsonValue> e : paramsObj.members().entrySet()) {
-            if (!isAllowedParameter(skill, e.getKey())) {
-                return intentFailure(FailureReason.UNKNOWN_PARAMETER,
-                        "skill=" + skill + " param=" + e.getKey());
-            }
-            if (!(e.getValue() instanceof JsonObject positionObj)) {
-                throw new SchemaException(FailureReason.TYPE_MISMATCH,
-                        "parameters." + e.getKey() + " must be object");
-            }
-            params.put(e.getKey(), decodePosition(
-                    positionObj, "parameters." + e.getKey()));
-        }
-        // CHASE/ATTACK/GUARD 必填 targetPosition
-        if (skill != AgentProtocol.Skill.PATROL) {
-            if (!params.containsKey("targetPosition")) {
-                return intentFailure(FailureReason.MISSING_REQUIRED,
-                        "targetPosition for skill=" + skill);
-            }
-        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> params = (Map<String, Object>) decodeGeneric(
+                paramsObj, 0, "parameters");
         Double confidence = requireDouble(obj, "confidence");
         if (confidence == null) {
             return intentFailure(FailureReason.MISSING_REQUIRED, "confidence");
@@ -1236,17 +1246,29 @@ public final class AgentProtocolCodec {
         if (validForTicks < 1 || validForTicks > 60) {
             return intentFailure(FailureReason.OUT_OF_RANGE, "validForTicks: " + validForTicks);
         }
-        // interruptPolicy 可选
-        AgentProtocol.InterruptPolicyData policy = null;
-        JsonValue policyVal = obj.members().get("interruptPolicy");
-        if (policyVal instanceof JsonObject policyObj) {
-            policy = decodeInterruptPolicy(policyObj);
-        } else if (policyVal != null && !(policyVal instanceof JsonNull)) {
-            return intentFailure(FailureReason.TYPE_MISMATCH, "interruptPolicy");
+        AgentProtocol.InterruptPolicyData policy = decodeInterruptPolicy(
+                requireObject(obj, "interruptPolicy"));
+        JsonObject metadataObj = requireObject(obj, "planMetadata");
+        ensureOnlyFields(metadataObj, "planMetadata",
+                "planId", "stepId", "revision");
+        String planId = requireString(metadataObj, "planId");
+        String stepId = requireString(metadataObj, "stepId");
+        Long revision = requireInt(metadataObj, "revision");
+        if (planId == null || stepId == null || revision == null) {
+            return intentFailure(FailureReason.MISSING_REQUIRED,
+                    "planMetadata fields");
+        }
+        if (planId.isEmpty() || stepId.isEmpty()
+                || planId.length() > MAX_STRING_CHARS
+                || stepId.length() > MAX_STRING_CHARS
+                || revision < 0 || revision > Integer.MAX_VALUE) {
+            return intentFailure(FailureReason.OUT_OF_RANGE, "planMetadata");
         }
         return new IntentDecodeResult(new AgentProtocol.IntentData(
-                intentVersion, skill, params, confidence,
-                validForTicks.intValue(), policy), null);
+                intentVersion, skillStr, params, confidence,
+                validForTicks.intValue(), policy,
+                new AgentProtocol.PlanMetadataData(
+                        planId, stepId, revision.intValue())), null);
     }
 
     private static IntentDecodeResult intentFailure(
@@ -1255,12 +1277,60 @@ public final class AgentProtocolCodec {
         return new IntentDecodeResult(null, new ProtocolFailure(reason, detail));
     }
 
-    /** 检查参数 key 是否属于该 skill 允许的集合 */
-    private static boolean isAllowedParameter(AgentProtocol.Skill skill, String key) {
-        return switch (key) {
-            case "targetPosition" -> true; // PATROL 可选，其余 skill 必填
-            default -> false;
-        };
+    private static Object decodeGeneric(
+            JsonValue value, int depth, String context) {
+        if (depth > MAX_PARAMETER_DEPTH) {
+            throw new SchemaException(
+                    FailureReason.PARAMETER_LIMIT_EXCEEDED, context);
+        }
+        if (value instanceof JsonNull) {
+            return null;
+        }
+        if (value instanceof JsonBool bool) {
+            return bool.value();
+        }
+        if (value instanceof JsonString string) {
+            if (string.value().length() > MAX_STRING_CHARS) {
+                throw new SchemaException(
+                        FailureReason.PARAMETER_LIMIT_EXCEEDED, context);
+            }
+            return string.value();
+        }
+        if (value instanceof JsonNumber number) {
+            if (number.isInteger()) {
+                return number.longValueExact();
+            }
+            return number.doubleValue();
+        }
+        if (value instanceof JsonArray array) {
+            if (array.elements().size() > MAX_ARRAY_ITEMS) {
+                throw new SchemaException(
+                        FailureReason.PARAMETER_LIMIT_EXCEEDED, context);
+            }
+            List<Object> result = new ArrayList<>();
+            for (int index = 0; index < array.elements().size(); index++) {
+                result.add(decodeGeneric(array.elements().get(index),
+                        depth + 1, context + "[" + index + "]"));
+            }
+            return java.util.Collections.unmodifiableList(result);
+        }
+        JsonObject object = (JsonObject) value;
+        if (object.members().size() > MAX_OBJECT_KEYS) {
+            throw new SchemaException(
+                    FailureReason.PARAMETER_LIMIT_EXCEEDED, context);
+        }
+        LinkedHashMap<String, Object> result = new LinkedHashMap<>();
+        for (Map.Entry<String, JsonValue> entry : object.members().entrySet()) {
+            if (entry.getKey().isEmpty()
+                    || entry.getKey().length() > MAX_STRING_CHARS) {
+                throw new SchemaException(
+                        FailureReason.PARAMETER_LIMIT_EXCEEDED, context);
+            }
+            result.put(entry.getKey(), decodeGeneric(
+                    entry.getValue(), depth + 1,
+                    context + "." + entry.getKey()));
+        }
+        return java.util.Collections.unmodifiableMap(result);
     }
 
     private static AgentProtocol.InterruptPolicyData decodeInterruptPolicy(JsonObject obj) {

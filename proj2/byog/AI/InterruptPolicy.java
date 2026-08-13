@@ -36,16 +36,8 @@ public final class InterruptPolicy {
 
     /** 从协议层 InterruptPolicyData 构造；null 时返回安全默认值。 */
     public static InterruptPolicy fromData(AgentProtocol.InterruptPolicyData data) {
-        return fromData(data, null);
-    }
-
-    /** 从协议层构造；缺失时按 skill 使用 Java 侧安全默认值。 */
-    public static InterruptPolicy fromData(
-            AgentProtocol.InterruptPolicyData data,
-            AgentProtocol.Skill skill) {
         if (data == null) {
-            return skill == AgentProtocol.Skill.GUARD
-                    ? guardDefault() : safeDefault();
+            return safeDefault();
         }
         return new InterruptPolicy(
                 data.engageVisiblePlayer(),

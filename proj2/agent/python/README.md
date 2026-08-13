@@ -1,65 +1,105 @@
 # Python 智能体运行时
 
-此目录包含 DungeonMind 的 Python 智能体实现。它作为独立进程运行，通过
-本机 TCP 和 NDJSON 协议与 Java 游戏进程通信，不直接访问 Java 对象、完整地图
-或玩家的隐藏状态。
+这个目录提供独立的 Python 智能体进程。它通过本机 TCP/NDJSON 接收 Java 生成的私有观察，
+返回 `strategic-intent.v2`；移动、碰撞、攻击、伤害和最终提交始终由 Java 决定。
 
-完整设计说明见 [`agentarchitecture.md`](../../agentarchitecture.md)。
+当前可直接运行两种大脑：
 
-文中的 runtime（运行时）是这个独立 Python 进程；TCP 是提供可靠有序字节流的网络
-协议；NDJSON 是“每行一个 JSON 对象”的消息格式；codec（编解码器）负责把 Python
-对象与协议字节互相转换并校验字段；brain（大脑）只根据 observation（私有观察）生成
-intent（战略意图），不会直接生成或执行 Java `Action`；deterministic（确定性）表示
-相同观察产生相同决策。
+- `deterministic`：无第三方模型调用，用固定规则返回意图；
+- `scripted`：用脚本化 `ModelAdapter` 驱动真实 LangGraph、只读工具、checkpoint、scheduler 和取消链。
 
-## 目录结构
+真实模型模式尚未绑定任何供应商，也不会读取 API key。需要联调真实模型时，先实现项目自己的
+`ModelAdapter`，再配置对应 API；不要把凭据写进仓库、trace 或 ready 输出。
 
-```text
-python/
-  dungeonmind_agent/
-    protocol.py            严格协议编解码与字段校验
-    server.py              多连接 TCP 服务器与故障模式
-    brain/
-      deterministic.py     确定性决策大脑
-  run.py                   命令行入口
-```
+完整进程边界见 [`agentarchitecture.md`](../../agentarchitecture.md)，wire 字段见
+[`agent/contract/README.md`](../contract/README.md)。
 
-协议与传输、大脑决策相互独立：`protocol.py` 只负责通信契约，`server.py` 只负责
-连接和生命周期，`brain/` 只根据已经校验的 observation 生成受限 intent。
+## 环境
 
-## 启动运行时
-
-在项目根目录执行：
+项目固定使用 Python `>=3.14,<3.15`，直接依赖及传递依赖记录在 `pylock.toml`。本地虚拟环境
+`.venv/` 是生成物，不提交。
 
 ```powershell
-python agent/python/run.py `
-    --host 127.0.0.1 `
-    --port 9876 `
-    --mode normal
+python -m venv agent/python/.venv
+& agent/python/.venv/Scripts/python.exe -m pip install -r agent/python/pylock.toml
+$env:PYTHONPATH = (Resolve-Path agent/python).Path
 ```
 
-服务器启动成功后会向标准输出写入一行 JSON ready 信号；ready 表示监听端口已经建立，
-父进程或操作者现在可以连接。生产 `Main` 不负责
-自动启动或结束该进程，并且当前使用默认关闭的 Bridge 配置；单独看到 ready
-不表示交互式游戏已经连接。自定义入口可向 `Game` 传入启用的 `AgentSessionConfig`。
+`pylock.toml` 当前只锁定 LangGraph、LangChain、SQLite checkpointer 和 Pydantic 这一条
+供应商无关的运行链，不包含具体模型 SDK。
 
-## 运行模式
+## 启动
 
-| 模式 | 行为 |
-|------|------|
-| `normal` | 立即返回合法且确定的 intent |
-| `delay` | 故意延迟返回，使 Java 在等待期间继续使用本地控制 |
-| `malformed` | 故意返回非法帧，使 Java 进入协议拒绝路径 |
-| `disconnect` | 收到 observation 后断开连接 |
-| `no-read` | 接受连接但不读取数据，让发送压力逐步传回 Java 的有界队列 |
+确定性运行时：
 
-`delay` 模式可通过 `--delay-seconds` 调整延迟时间。所有模式均不得访问外部
-模型或网络服务。
+```powershell
+$env:PYTHONPATH = (Resolve-Path agent/python).Path
+& agent/python/.venv/Scripts/python.exe agent/python/run.py `
+    --host 127.0.0.1 --port 9876 `
+    --mode normal --brain deterministic
+```
 
-## 实现边界
+脚本化图运行时：
 
-- Python 只消费协议提供的私有 observation，不读取 Java 世界对象。
-- Python 只能提出白名单内的战略 intent，移动、碰撞、攻击和伤害仍由 Java 判定。
-- 每条 TCP 连接拥有独立的大脑和消息序列，不共享 Enemy 状态。
-- 新的大脑实现放入 `dungeonmind_agent/brain/`，不得混入协议或服务器模块。
-- 跨语言协议变更必须同步更新 `agent/contract/`、Java codec 和所有语言实现。
+```powershell
+$env:PYTHONPATH = (Resolve-Path agent/python).Path
+& agent/python/.venv/Scripts/python.exe agent/python/run.py `
+    --host 127.0.0.1 --port 9876 `
+    --mode normal --brain scripted `
+    --checkpoint-db save/agent-checkpoint.sqlite `
+    --runtime-trace reports/agent-model.ndjson
+```
+
+启动成功后，stdout 只写一行 JSON ready 信号和协议定义的输出。诊断信息走 stderr。
+默认游戏配置仍关闭 Bridge；看到 ready 不代表交互式游戏已经连接。
+
+## 运行结构
+
+```text
+dungeonmind_agent/
+  protocol.py        严格 envelope 与 intent v2 编解码
+  server.py          多连接 reader、串行 response emitter 与生命周期
+  config.py          有界运行配置；真实模型未配置时在 ready 前失败
+  checkpoint.py      InMemorySaver / SqliteSaver 生命周期
+  observability.py   白名单字段 model trace
+  brain/             deterministic、graph brain 与 factory
+  graph/             Agent state、只读 tools 和有界 StateGraph
+  model/             供应商无关 adapter 与全局 scheduler
+```
+
+每条连接拥有独立 brain 和 response sequence。LangGraph checkpoint 用
+`(worldId, floorId, agentId)` 编码后的无歧义 `thread_id` 隔离；scheduler 只共享并发和遭遇预算，
+不能读取某个 Agent 的 graph state。
+
+## 故障演练模式
+
+| `--mode` | 行为 |
+|---|---|
+| `normal` | 由所选 brain 正常返回 intent |
+| `delay` | 延迟响应，验证 Java tick 和本地控制继续 |
+| `malformed` | 返回非法 JSON，验证协议拒绝 |
+| `disconnect` | 收到 observation 后断开 |
+| `no-read` | 接受连接但不读取，验证有界背压 |
+
+这些模式不会访问真实模型服务。
+
+## 验证
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path agent/python).Path
+& agent/python/.venv/Scripts/python.exe -m unittest discover `
+    -s agent/python/tests -v
+```
+
+测试覆盖跨语言 fixture、图工具链、checkpoint 重开、Agent 隔离、scheduler 并发上限、排队取消、
+迟到结果抑制和 trace 脱敏。测试默认不访问外网、不调用付费服务，也不写玩家存档。
+
+## 接入自己的 API
+
+现在不需要配置。准备真实模型联调时再完成以下三件事：
+
+1. 在 `dungeonmind_agent/model/` 实现 `ModelAdapter.invoke()`；
+2. 在 `brain/factory.py` 的 `model` 组合路径注入该 adapter，并在 ready 前校验必需配置；
+3. 通过本地环境变量或外部 secret store 提供凭据，然后单独运行真实 provider smoke。
+
+不要改变 Java `TacticalSkillRegistry` 来适配供应商，也不要让 Python 直接生成 Java `Action`。

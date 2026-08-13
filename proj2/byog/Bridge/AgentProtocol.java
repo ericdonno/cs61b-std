@@ -17,7 +17,7 @@ public final class AgentProtocol {
     /** observation payload 版本 */
     public static final String OBSERVATION_VERSION = "private-observation.v2";
     /** intent payload 版本 */
-    public static final String INTENT_VERSION = "strategic-intent.v1";
+    public static final String INTENT_VERSION = "strategic-intent.v2";
 
     private AgentProtocol() {
     }
@@ -181,37 +181,21 @@ public final class AgentProtocol {
     /** 意图数据 */
     public record IntentData(
             String intentVersion,
-            Skill skill,
+            String skill,
             Map<String, Object> parameters,
             double confidence,
             int validForTicks,
-            InterruptPolicyData interruptPolicy
+            InterruptPolicyData interruptPolicy,
+            PlanMetadataData planMetadata
     ) {
         public IntentData {
             Objects.requireNonNull(intentVersion, "intentVersion");
             Objects.requireNonNull(skill, "skill");
             Objects.requireNonNull(parameters, "parameters");
-            for (Map.Entry<String, Object> entry : parameters.entrySet()) {
-                Objects.requireNonNull(entry.getKey(), "parameter key");
-                Objects.requireNonNull(
-                        entry.getValue(), "parameter value for " + entry.getKey());
-                if (!"targetPosition".equals(entry.getKey())) {
-                    throw new IllegalArgumentException(
-                            "unknown parameter for " + skill + ": "
-                                    + entry.getKey());
-                }
-                if (!(entry.getValue() instanceof PositionData)) {
-                    throw new IllegalArgumentException(
-                            "targetPosition must be PositionData");
-                }
+            if (!skill.matches("[A-Z][A-Z0-9_]{0,63}")) {
+                throw new IllegalArgumentException("invalid skill id: " + skill);
             }
-            if (skill != Skill.PATROL
-                    && !parameters.containsKey("targetPosition")) {
-                throw new IllegalArgumentException(
-                        "targetPosition is required for " + skill);
-            }
-            parameters = Collections.unmodifiableMap(
-                    new LinkedHashMap<>(parameters));
+            parameters = immutableJsonObject(parameters);
             if (!Double.isFinite(confidence)) {
                 throw new IllegalArgumentException("confidence must be finite");
             }
@@ -222,6 +206,24 @@ public final class AgentProtocol {
             if (validForTicks < 1 || validForTicks > 60) {
                 throw new IllegalArgumentException(
                         "validForTicks must be between 1 and 60");
+            }
+            Objects.requireNonNull(interruptPolicy, "interruptPolicy");
+            Objects.requireNonNull(planMetadata, "planMetadata");
+        }
+    }
+
+    /** Runtime-owned correlation metadata; it is not a multi-step executor. */
+    public record PlanMetadataData(
+            String planId, String stepId, int revision) {
+        public PlanMetadataData {
+            Objects.requireNonNull(planId, "planId");
+            Objects.requireNonNull(stepId, "stepId");
+            if (planId.isEmpty() || stepId.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "planId and stepId must not be empty");
+            }
+            if (revision < 0) {
+                throw new IllegalArgumentException("revision must be >= 0");
             }
         }
     }
@@ -376,5 +378,41 @@ public final class AgentProtocol {
                 }
             }
         }
+    }
+
+    private static Map<String, Object> immutableJsonObject(
+            Map<String, Object> source) {
+        LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : source.entrySet()) {
+            String key = Objects.requireNonNull(entry.getKey(), "parameter key");
+            copy.put(key, immutableJsonValue(entry.getValue()));
+        }
+        return Collections.unmodifiableMap(copy);
+    }
+
+    private static Object immutableJsonValue(Object value) {
+        if (value == null || value instanceof String
+                || value instanceof Boolean || value instanceof Integer
+                || value instanceof Long || value instanceof Double) {
+            if (value instanceof Double number && !Double.isFinite(number)) {
+                throw new IllegalArgumentException("JSON number must be finite");
+            }
+            return value;
+        }
+        if (value instanceof Map<?, ?> map) {
+            LinkedHashMap<String, Object> typed = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (!(entry.getKey() instanceof String key)) {
+                    throw new IllegalArgumentException("JSON object key must be string");
+                }
+                typed.put(key, immutableJsonValue(entry.getValue()));
+            }
+            return Collections.unmodifiableMap(typed);
+        }
+        if (value instanceof List<?> list) {
+            return list.stream().map(AgentProtocol::immutableJsonValue).toList();
+        }
+        throw new IllegalArgumentException(
+                "unsupported JSON parameter type: " + value.getClass());
     }
 }

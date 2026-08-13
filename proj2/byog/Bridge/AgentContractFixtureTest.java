@@ -73,6 +73,23 @@ public class AgentContractFixtureTest {
         assertEquals("NORTH", data.self().facing());
     }
 
+    @Test
+    public void validIntentFixtureDecodesGenericParameters()
+            throws Exception {
+        DecodeResult result = decode("valid-submit-intent-v2.json");
+        assertTrue("must decode: " + result,
+                result instanceof DecodeResult.Success);
+        AgentProtocol.SubmitIntentData data =
+                (AgentProtocol.SubmitIntentData)
+                        ((DecodeResult.Success) result).envelope().data;
+        assertEquals("strategic-intent.v2",
+                data.intent().intentVersion());
+        assertEquals("CHASE", data.intent().skill());
+        assertEquals("plan-fixture-1",
+                data.intent().planMetadata().planId());
+        assertTrue(data.intent().parameters().containsKey("futureHints"));
+    }
+
     // ---------- P25-PROTOCOL-02/03 非法 fixture 稳定拒绝 ----------
 
     @Test
@@ -84,6 +101,12 @@ public class AgentContractFixtureTest {
     @Test
     public void oldObservationVersionIsRejected() throws Exception {
         assertFailure("invalid-old-observation-version.json",
+                FailureReason.UNKNOWN_PAYLOAD_VERSION);
+    }
+
+    @Test
+    public void oldIntentVersionIsRejected() throws Exception {
+        assertFailure("invalid-old-intent-version.json",
                 FailureReason.UNKNOWN_PAYLOAD_VERSION);
     }
 

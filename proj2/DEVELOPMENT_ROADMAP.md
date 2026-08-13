@@ -156,7 +156,7 @@ commit barrier、deterministic fake runtime 与 Completion。
 
 **交付物**：
 
-- 当前稳定版本的 Python、LangGraph/LangChain 依赖与锁文件。
+- 当前稳定版本的 Python、LangGraph/LangChain 依赖与锁文件；默认不安装具体 provider SDK。
 - 按 `worldId / floorId / agentId` 隔离的 Agent state 和 checkpoint；`runId` 继续隔离当前运行的旧连接与迟到响应。
 - 条件化 Tool Calling 循环，并设置最大轮数与 deadline。
 - 全部 deterministic/model brain、Java/Python codec 和 fixtures 一次性硬切 `strategic-intent.v2`；不保留 v1 双读或降级输出。v2 不能冻结为仅有 `goal + target`，至少支持类型化 `skill`、受约束参数、有效期、中断策略和可扩展的计划元数据。
@@ -164,10 +164,15 @@ commit barrier、deterministic fake runtime 与 Completion。
 - Python schema 校验和 Java 权威二次校验。
 - 全局推理调度与预算：限制整个遭遇中的模型并发、排队长度和调用量；调度器只能安排调用，不能合并不同敌人的私有上下文或知识。
 - `agent-model.trace.v1` 与 `agent-runtime.trace.v3`：可查看并关联模型、工具、延迟、token、校验和 fallback。
+- provider-neutral `ModelAdapter`；具体 API、SDK、模型 ID 与凭据由 Builder 后续配置，届时补做真实 provider smoke。
 
-**完成标准**：Agent 只能使用 observation 中的信息；确实发生模型—工具—模型循环；同一命名世界同一楼层读档可恢复对应敌人的有界 checkpoint，而新世界或新楼层冷启动；受支持 skill 能通过确定性执行 seam 落为动作；未知、非法或不可达意图被拒绝；多个敌人的上下文不会串线；同时活跃敌人增多时模型调用仍受全局预算约束且游戏线程不阻塞。
+**完成标准**：Agent 只能使用 observation 中的信息；scripted model 确实发生模型—工具—模型循环；同一命名世界同一楼层读档可恢复对应敌人的有界 checkpoint，而新世界或新楼层冷启动；受支持 skill 能通过确定性执行 seam 落为动作；未知、非法或不可达意图被拒绝；多个敌人的上下文不会串线；同时活跃敌人增多时模型调用仍受全局预算约束且游戏线程不阻塞。真实 provider 兼容证据在 Builder 配置 API 后补充。
 
 **本阶段不做**：完整复杂战术技能库、多个敌人共享上下文、自动共享黑板、跨楼层长期记忆。
+
+**完成状态（2026-08-13）**：供应商无关实现与自动化闸门已完成，证据见
+[`PHASE_3_COMPLETION.md`](PHASE_3_COMPLETION.md)。真实 provider smoke 等 Builder 后续配置自己的
+API/adapter 后补验。
 
 ### 阶段 4：执行反馈与事件驱动重规划
 
@@ -266,9 +271,10 @@ commit barrier、deterministic fake runtime 与 Completion。
 阶段 0–6 合起来构成第一个 Agent MVP；中间阶段只是可验证的工程增量，不代表项目将 Agent 技术推迟到以后。
 
 Phase 0、Phase 1 和 Phase 2 已留下 Completion 与对应 artifacts；Phase 1.5 是可视化增强，不是 Agent 主线 gate。
-Phase 2 与 Phase 2.5 的最终 commit 均尚未回填，但当前工作树已有 Completion 记录的完整验收证据。
+Phase 2 已有 Completion；Phase 2.5 的最终实现基线为 `e6befe6`，Phase 3 从该提交创建 `result` 分支。
 
 Phase 2.5 自动验收已完成：`PHASE_2DOT5_COMPLETION.md` 记录了 173 个确定性测试、
-真实进程集成、共享 fixtures、领域命名迁移与连续移动证据。原 UI 视觉已由用户确认；剩余的新操控手感复验与最终 commit
-回填由用户确认；在 `PHASE_2DOT5_COMPLETION.md` 的 Definition of Done 全部勾选前，
-不开始 Phase 3 的真实模型、LangGraph、Tool Calling、skill registry 或 checkpoint 实现。
+真实进程集成、共享 fixtures、领域命名迁移与连续移动证据。原 UI 视觉已由用户确认；新操控手感仍未人工复验。
+Builder 于 2026-08-13 明确授权先提交该自动化基线并进入 Phase 3；该裁决不等于伪造人工复验结果。
+Phase 3 的具体 provider/API 由 Builder 后续配置，本轮先完成 LangGraph、Tool Calling、skill registry、
+checkpoint、调度与 scripted integration。

@@ -15,9 +15,9 @@ codec（编解码器）负责在类型化对象与 JSON 字节之间转换；fra
 |------|------|------|
 | Envelope | `agent-session.v1` | 顶层必填 `worldId` 身份字段 |
 | Observation | `private-observation.v2` | `self` 含 `maxHp`、`facing`；顶层含 `visionMode` |
-| Intent | `strategic-intent.v1` | 保持 Phase 2 语义；Phase 3 开始时整体升级到 v2 |
+| Intent | `strategic-intent.v2` | 字符串 skill、受限通用 JSON 参数和 runtime-owned plan metadata |
 
-旧版本 `phase2.session.v1`、`private-observation.v1` 与旧 trace 一律拒绝，
+旧版本 `phase2.session.v1`、`private-observation.v1`、`strategic-intent.v1` 与旧 trace 一律拒绝，
 不存在降级解码或宽松字段路径。
 
 ## Envelope 身份字段
@@ -47,6 +47,7 @@ codec（编解码器）负责在类型化对象与 JSON 字节之间转换；fra
 
 - `valid-observation-directional.json` / `valid-observation-omnidirectional.json`：
   合法 v2 observation，必须被两端解码为相同 typed data。
+- `valid-submit-intent-v2.json`：合法 v2 intent，覆盖字符串 skill、嵌套参数和 plan metadata。
 - `invalid-*.json`：非法样例，必须被两端以稳定 rejection code 拒绝
   （`SCHEMA_MISMATCH`、`UNKNOWN_PAYLOAD_VERSION`、`MISSING_REQUIRED`、
   `UNKNOWN_FIELD` 等）。

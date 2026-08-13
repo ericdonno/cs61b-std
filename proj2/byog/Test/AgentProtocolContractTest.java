@@ -409,15 +409,12 @@ public class AgentProtocolContractTest {
         AgentProtocol.Identity identity = new AgentProtocol.Identity(
                 "world-test", RUN_ID, FLOOR_ID, AGENT_ID, SESSION_EPOCH, REQUEST_GENERATION);
 
-        // 未知 skill "FLY"
-        // Java enum 无法表达未知 skill，因此直接构造 wire JSON。
+        // Wire codec 接受结构合法的新 ID，具体支持集由 registry 决定。
         String badSkillJson = buildSubmitIntentJson("FLY", "targetPosition", 3, 2,
                 idGen, identity);
         DecodeResult result = AgentProtocolCodec.decodeMessage(badSkillJson);
-        assertTrue("FLY should fail: " + describe(result),
-                result instanceof DecodeResult.Failure);
-        assertEquals(FailureReason.UNKNOWN_SKILL,
-                ((DecodeResult.Failure) result).failure().reason());
+        assertTrue("FLY should decode for registry validation: " + describe(result),
+                result instanceof DecodeResult.Success);
 
         // 未知 parameter "targetRoomId"
         idGen = new IdGenerator.DeterministicIdGenerator("decision", "msg");
@@ -425,10 +422,9 @@ public class AgentProtocolContractTest {
                 "targetPosition", 3, 2, "targetRoomId", 5,
                 idGen, identity);
         result = AgentProtocolCodec.decodeMessage(badParamJson);
-        assertTrue("unknown param should fail: " + describe(result),
-                result instanceof DecodeResult.Failure);
-        assertEquals(FailureReason.UNKNOWN_PARAMETER,
-                ((DecodeResult.Failure) result).failure().reason());
+        assertTrue("unknown parameter should decode for registry validation: "
+                        + describe(result),
+                result instanceof DecodeResult.Success);
     }
 
     // ────────── 辅助构造方法 ──────────
@@ -535,12 +531,14 @@ public class AgentProtocolContractTest {
 
     private static AgentProtocol.SubmitIntentData buildSubmitIntentData(IdGenerator idGen) {
         Map<String, Object> params = new LinkedHashMap<>();
-        params.put("targetPosition", new AgentProtocol.PositionData(3, 2));
+        params.put("targetPosition", Map.of("x", 3L, "y", 2L));
         AgentProtocol.IntentData intent = new AgentProtocol.IntentData(
                 AgentProtocol.INTENT_VERSION,
-                AgentProtocol.Skill.CHASE,
+                "CHASE",
                 params, 0.8, 20,
-                new AgentProtocol.InterruptPolicyData(true, true, true));
+                new AgentProtocol.InterruptPolicyData(true, true, true),
+                new AgentProtocol.PlanMetadataData(
+                        "contract-plan", "intent-0", 0));
         return new AgentProtocol.SubmitIntentData(
                 idGen.newDecisionId(), 5, 2, intent);
     }
@@ -591,7 +589,8 @@ public class AgentProtocolContractTest {
         intentObj.members().put("parameters", paramsObj);
         intentObj.members().put("confidence", new AgentProtocolCodec.JsonNumber(0.8, false));
         intentObj.members().put("validForTicks", new AgentProtocolCodec.JsonNumber(20, true));
-        intentObj.members().put("interruptPolicy", new AgentProtocolCodec.JsonNull());
+        intentObj.members().put("interruptPolicy", buildPolicyJson());
+        intentObj.members().put("planMetadata", buildPlanMetadataJson());
 
         dataObj.members().put("intent", intentObj);
 
@@ -626,12 +625,33 @@ public class AgentProtocolContractTest {
         intentObj.members().put("parameters", paramsObj);
         intentObj.members().put("confidence", new AgentProtocolCodec.JsonNumber(0.8, false));
         intentObj.members().put("validForTicks", new AgentProtocolCodec.JsonNumber(20, true));
-        intentObj.members().put("interruptPolicy", new AgentProtocolCodec.JsonNull());
+        intentObj.members().put("interruptPolicy", buildPolicyJson());
+        intentObj.members().put("planMetadata", buildPlanMetadataJson());
 
         dataObj.members().put("intent", intentObj);
 
         return buildEnvelopeJson(AgentProtocol.MessageType.SUBMIT_INTENT, dataObj,
                 idGen, identity);
+    }
+
+    private static JsonObject buildPolicyJson() {
+        JsonObject policy = new JsonObject(new LinkedHashMap<>());
+        policy.members().put("engageVisiblePlayer",
+                new AgentProtocolCodec.JsonBool(true));
+        policy.members().put("respondToAdjacentThreat",
+                new AgentProtocolCodec.JsonBool(true));
+        policy.members().put("allowLocalReroute",
+                new AgentProtocolCodec.JsonBool(true));
+        return policy;
+    }
+
+    private static JsonObject buildPlanMetadataJson() {
+        JsonObject metadata = new JsonObject(new LinkedHashMap<>());
+        metadata.members().put("planId", new JsonString("wire-plan"));
+        metadata.members().put("stepId", new JsonString("intent-0"));
+        metadata.members().put("revision",
+                new AgentProtocolCodec.JsonNumber(0, true));
+        return metadata;
     }
 
     private static String buildEnvelopeJson(

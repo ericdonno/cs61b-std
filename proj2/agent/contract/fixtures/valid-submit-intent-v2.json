@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "agent-session.v1",
+  "messageId": "agent-fixture-1",
+  "messageSeq": 1,
+  "worldId": "world-fixture",
+  "runId": "run-fixture",
+  "floorId": 1,
+  "agentId": "guard-a",
+  "sessionEpoch": 2,
+  "logicalTick": 42,
+  "type": "submit_intent",
+  "data": {
+    "decisionId": "decision-fixture-1",
+    "observationSeq": 7,
+    "requestGeneration": 3,
+    "intent": {
+      "intentVersion": "strategic-intent.v2",
+      "skill": "CHASE",
+      "parameters": {
+        "targetPosition": {"x": 3, "y": 2},
+        "futureHints": [true, null, "bounded"]
+      },
+      "confidence": 0.8,
+      "validForTicks": 20,
+      "interruptPolicy": {
+        "engageVisiblePlayer": true,
+        "respondToAdjacentThreat": true,
+        "allowLocalReroute": true
+      },
+      "planMetadata": {
+        "planId": "plan-fixture-1",
+        "stepId": "intent-0",
+        "revision": 0
+      }
+    }
+  }
+}

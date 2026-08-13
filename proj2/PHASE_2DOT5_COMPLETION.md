@@ -5,12 +5,13 @@
 - **完成日期**：2026-08-03；2026-08-13 增补玩家连续移动与巡视面墙脱困修正（新手感仍待用户复验）
 - **分支**：`ai-enemis`
 - **基线 HEAD**：`142452b4c32050536f282f6647f349ac4c492e31`（`phase2.5 done by deepseekv4flash/reasonix`）
-- **工作树**：本次验证对应该 HEAD 加玩家输入文档、生产代码与测试改动；用户已有的 `1.md` 修改和三个 `run*_out.txt` 不属于本次交付
+- **最终实现基线**：`e6befe6`（玩家输入 cadence、巡视恢复、测试与文档已提交）
+- **工作树**：Phase 3 从 `e6befe6` 创建 `result` 分支；`run*_out.txt` 为忽略的运行生成物
 - **规范**：`PHASE_2DOT5_SPEC.md`
 - **构建指南**：`PHASE_2DOT5_BUILD_GUIDE.md`
 - **运行环境**：Windows / PowerShell，Java 19.0.2，Python 3.14.6
 
-> 玩家输入修正尚未形成最终 commit（用户未授权提交）。正式提交后需回填 commit。
+> Builder 于 2026-08-13 授权提交并继续 Phase 3；新操控手感仍未人工复验，本裁决不把未执行项写成通过。
 
 ## 2. 验收摘要
 
@@ -178,7 +179,7 @@ Python runner `test_contract_fixtures.py` 同次验证）：
    还是修订批准文档为两次。
 7. **连续移动新手感待用户复验**：按键状态、60ms cadence（约 16.7 格/秒）、松键无积压和单次画面提交已有自动化/源码证据，
    但本轮没有替用户操作 GUI，最终主观手感仍需人工试玩确认。
-8. **最终 commit 未创建**：本次修正的测试结果对应 `142452b` + 当前工作树；提交后需回填。
+8. **最终实现已提交**：玩家输入与巡视修正位于 `e6befe6`；Phase 3 的 `result` 分支从该提交开始。
 
 ## 8. Definition of Done 对照
 
@@ -198,9 +199,8 @@ Python runner `test_contract_fixtures.py` 同次验证）：
 - [x] 默认 deterministic gate 无 GUI、真实网络、默认存档和 sleep。
 - [x] Phase 2 Session/deadline/cancel/fallback/feedback/真实进程故障回归通过。
 - [x] Roadmap、healthpack、Phase 3 两份草案已同步（见 §9）。
-- [ ] 验证命令、测试数、人工证据、偏差与最终 commit 写入本 Completion —— 连续移动人工复验与
-      commit 回填待用户确认后补记。
-- [ ] Phase 3 只在以上条件全部满足后开始 —— 等待连续移动人工复验与 commit 授权。
+- [x] 验证命令、测试数、偏差与最终实现基线写入本 Completion；连续移动人工复验明确保留为未验证项。
+- [x] Builder 已授权从自动化通过且已提交的 `e6befe6` 开始 Phase 3；该授权不改变人工证据事实。
 
 ## 9. 文档同步
 

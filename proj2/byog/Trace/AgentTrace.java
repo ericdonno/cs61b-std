@@ -28,7 +28,7 @@ public final class AgentTrace {
      */
     public static final String LEGACY_DECISION_TRACE_VERSION = "legacy-decision.trace.v1";
     public static final String PRIVATE_PERCEPTION_TRACE_VERSION = "private-perception.trace.v1";
-    public static final String AGENT_RUNTIME_TRACE_VERSION = "agent-runtime.trace.v2";
+    public static final String AGENT_RUNTIME_TRACE_VERSION = "agent-runtime.trace.v3";
 
     /**
      * 一次敌人决策的四个生命周期节点。
@@ -151,6 +151,10 @@ public final class AgentTrace {
         public final String validationResult;
         public final String overrideReason;
         public final Integer actionIndex;
+        public final String skillId;
+        public final String planId;
+        public final String stepId;
+        public final Integer planRevision;
 
         // ----- v2 感知/朝向/巡视关联字段 -----
         public final String worldId;
@@ -211,6 +215,10 @@ public final class AgentTrace {
             this.validationResult = null;
             this.overrideReason = null;
             this.actionIndex = null;
+            this.skillId = null;
+            this.planId = null;
+            this.stepId = null;
+            this.planRevision = null;
             this.worldId = null;
             this.visionMode = null;
             this.selfFacing = null;
@@ -261,6 +269,10 @@ public final class AgentTrace {
             this.validationResult = builder.validationResult;
             this.overrideReason = builder.overrideReason;
             this.actionIndex = builder.actionIndex;
+            this.skillId = builder.skillId;
+            this.planId = builder.planId;
+            this.stepId = builder.stepId;
+            this.planRevision = builder.planRevision;
             this.worldId = builder.worldId;
             this.visionMode = builder.visionMode;
             this.selfFacing = builder.selfFacing;
@@ -397,6 +409,10 @@ public final class AgentTrace {
         private String validationResult;
         private String overrideReason;
         private Integer actionIndex;
+        private String skillId;
+        private String planId;
+        private String stepId;
+        private Integer planRevision;
         private String actionType;
         private String rawActionResult;
         private Integer beforeX;
@@ -505,6 +521,16 @@ public final class AgentTrace {
         public AgentEventBuilder decision(String id, String source) {
             decisionId = id;
             decisionSource = source;
+            return this;
+        }
+
+        public AgentEventBuilder plan(
+                String skillId, String planId,
+                String stepId, Integer revision) {
+            this.skillId = skillId;
+            this.planId = planId;
+            this.stepId = stepId;
+            this.planRevision = revision;
             return this;
         }
 
@@ -683,6 +709,10 @@ public final class AgentTrace {
                     sb, "validationResult", e.validationResult, false);
             appendNullableStr(sb, "overrideReason", e.overrideReason, false);
             appendNullableInt(sb, "actionIndex", e.actionIndex, false);
+            appendNullableStr(sb, "skillId", e.skillId, false);
+            appendNullableStr(sb, "planId", e.planId, false);
+            appendNullableStr(sb, "stepId", e.stepId, false);
+            appendNullableInt(sb, "planRevision", e.planRevision, false);
             appendNullableStr(sb, "actionType", e.actionType, false);
             appendNullableStr(
                     sb, "rawActionResult", e.rawActionResult, false);

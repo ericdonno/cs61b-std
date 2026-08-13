@@ -295,7 +295,7 @@ public class AgentArbiterTest {
                 fixture.adoptPatrolFromObservation(
                         "decision-1", oldObservation,
                         new Position(5, 1), 2);
-        assertEquals(DecisionValidator.ValidationResult.STALE_PRECONDITION,
+        assertEquals(DecisionValidator.ValidationResult.SKILL_PRECONDITION_FAILED,
                 result);
 
         // No lease adopted, P2 reflex continues
@@ -618,15 +618,17 @@ public class AgentArbiterTest {
 
             Map<String, Object> params = new LinkedHashMap<>();
             params.put("targetPosition",
-                    new AgentProtocol.PositionData(target.x, target.y));
+                    Map.of("x", (long) target.x, "y", (long) target.y));
 
             AgentProtocol.InterruptPolicyData policy =
                     new AgentProtocol.InterruptPolicyData(
                             engageVisiblePlayer, true, true);
 
             AgentProtocol.IntentData intent = new AgentProtocol.IntentData(
-                    AgentProtocol.INTENT_VERSION, skill, params,
-                    0.8, validForTicks, policy);
+                    AgentProtocol.INTENT_VERSION, skill.name(), params,
+                    0.8, validForTicks, policy,
+                    new AgentProtocol.PlanMetadataData(
+                            decisionId + ":plan", "intent-0", 0));
 
             AgentProtocol.SubmitIntentData proposal =
                     new AgentProtocol.SubmitIntentData(

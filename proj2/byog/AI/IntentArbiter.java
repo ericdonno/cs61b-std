@@ -1,10 +1,15 @@
 package byog.AI;
 
 import byog.Bridge.AgentProtocol;
+import byog.Action.Action;
+import byog.Entity.EntityManager;
 import byog.TileEngine.TETile;
 import byog.Helper.Logger;
+import byog.lab5.Position;
 
+import java.util.List;
 import java.util.Objects;
+import java.util.Random;
 
 /**
  * 分优先级仲裁者。按固定优先级决定谁控制当前 action tick。
@@ -42,17 +47,31 @@ public final class IntentArbiter {
 
     private final ReflexController reflexController;
     private final DecisionValidator validator;
+    private final TacticalSkillRegistry skillRegistry;
     private IntentLease currentLease;
     private boolean overrideActive;
     private String overrideReason;
 
     public IntentArbiter() {
-        this(new ReflexController(), new DecisionValidator());
+        this(new ReflexController(), TacticalSkillRegistry.standard());
     }
 
     public IntentArbiter(ReflexController reflexController,
                          DecisionValidator validator) {
+        this(reflexController, TacticalSkillRegistry.standard(), validator);
+    }
+
+    public IntentArbiter(ReflexController reflexController,
+                         TacticalSkillRegistry skillRegistry) {
+        this(reflexController, skillRegistry,
+                new DecisionValidator(skillRegistry));
+    }
+
+    private IntentArbiter(ReflexController reflexController,
+                          TacticalSkillRegistry skillRegistry,
+                          DecisionValidator validator) {
         this.reflexController = Objects.requireNonNull(reflexController, "reflexController");
+        this.skillRegistry = Objects.requireNonNull(skillRegistry, "skillRegistry");
         this.validator = Objects.requireNonNull(validator, "validator");
     }
 
@@ -115,23 +134,17 @@ public final class IntentArbiter {
             TETile[][] committedWorld,
             long currentLogicalTick) {
 
-        DecisionValidator.ValidationResult result = validator.validate(
+        DecisionValidator.DecisionValidation validation = validator.validateDetailed(
                 proposal, envelope, expectation,
                 currentObservation, committedWorld);
 
-        if (result != DecisionValidator.ValidationResult.ACCEPTED) {
-            Logger.info("IntentArbiter: rejected remote intent: %s", result);
-            return result;
+        if (!validation.accepted()) {
+            Logger.info("IntentArbiter: rejected remote intent: %s", validation.result());
+            return validation.result();
         }
 
-        // 映射为 Java 内部 StrategicIntent
-        StrategicIntent intent = DecisionValidator.toStrategicIntent(
-                proposal.intent(), expectation.sourceObservation);
-
-        // 构造 InterruptPolicy
-        InterruptPolicy policy = InterruptPolicy.fromData(
-                proposal.intent().interruptPolicy(),
-                proposal.intent().skill());
+        StrategicIntent intent = validation.intent();
+        InterruptPolicy policy = validation.interruptPolicy();
 
         // 计算 TTL
         int validForTicks = proposal.intent().validForTicks();
@@ -158,7 +171,7 @@ public final class IntentArbiter {
         currentLease = lease;
         Logger.info("IntentArbiter: adopted remote lease decisionId=%s skill=%s validUntil=%d",
                 lease.getDecisionId(), proposal.intent().skill(), validUntilTick);
-        return result;
+        return validation.result();
     }
 
     /**
@@ -191,6 +204,17 @@ public final class IntentArbiter {
     /** 获取当前 lease（可能为 null）。 */
     public IntentLease getCurrentLease() {
         return currentLease;
+    }
+
+    /** Plans a registry-validated remote intent through its owning definition. */
+    public List<Action> planRemoteBounded(
+            StrategicIntent intent, Position actorPosition, int actorId,
+            TETile[][] committedWorld, EntityManager entityManager,
+            Random random, int maxActions) {
+        return skillRegistry.planBounded(intent,
+                new SkillPlanningContext(actorPosition, actorId,
+                        committedWorld, entityManager, random),
+                maxActions);
     }
 
     /** 是否处于反射覆盖中。 */
@@ -256,25 +280,11 @@ public final class IntentArbiter {
         }
 
         StrategicIntent intent = currentLease.getIntent();
-        StrategicIntent.Strategy strategy = intent.getStrategy();
-        switch (strategy) {
-            case CHASE:
-            case ATTACK:
-                if (!reflex.canSeePlayer()) {
-                    return false;
-                }
-                byog.lab5.Position expected = intent.getTargetPosition();
-                byog.lab5.Position visible =
-                        reflex.getVisiblePlayer().getPosition();
-                return expected != null
-                        && expected.equals(visible);
-            case PATROL:
-                return !reflex.canSeePlayer();
-            case GUARD:
-                return true;
-            default:
-                return true;
+        if (currentLease.getDecisionSource()
+                == AgentProtocol.DecisionSource.LOCAL_FALLBACK) {
+            return true;
         }
+        return skillRegistry.canResume(intent, reflex);
     }
 
     /**

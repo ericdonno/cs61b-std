@@ -150,6 +150,7 @@ public final class IntentLease {
                 ? null : new byog.lab5.Position(target.x, target.y);
         return new StrategicIntent(
                 source.getGoal(), source.getStrategy(), targetCopy,
-                source.getConfidence(), source.getTargetRoom());
+                source.getConfidence(), source.getTargetRoom(),
+                source.getSkillId(), source.getPlanMetadata());
     }
 }

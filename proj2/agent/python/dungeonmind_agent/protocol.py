@@ -11,10 +11,14 @@ from typing import Any
 # Compatibility value locked by the existing Java wire contract.
 ENVELOPE_VERSION = "agent-session.v1"
 OBSERVATION_VERSION = "private-observation.v2"
-INTENT_VERSION = "strategic-intent.v1"
+INTENT_VERSION = "strategic-intent.v2"
 
 DEFAULT_MAX_FRAME_BYTES = 65_536
 DEFAULT_MAX_DEPTH = 16
+MAX_PARAMETER_DEPTH = 8
+MAX_OBJECT_KEYS = 64
+MAX_ARRAY_ITEMS = 64
+MAX_STRING_CHARS = 1_024
 
 MESSAGE_TYPES = frozenset(
     {
@@ -280,35 +284,29 @@ def _submit_intent(value: Any) -> dict[str, Any]:
 
 def _intent(value: Any) -> dict[str, Any]:
     intent = _object(value, "intent")
-    required = (
+    fields = (
         "intentVersion",
         "skill",
         "parameters",
         "confidence",
         "validForTicks",
+        "interruptPolicy",
+        "planMetadata",
     )
-    allowed = required + ("interruptPolicy",)
-    _allowed_fields(intent, allowed, "intent")
-    _require_fields(intent, required, "intent")
+    _exact_fields(intent, fields, "intent")
     intent_version = _string(intent, "intentVersion")
     if intent_version != INTENT_VERSION:
         raise ProtocolViolation(
             "UNKNOWN_PAYLOAD_VERSION", f"intentVersion: {intent_version}"
         )
     skill = _string(intent, "skill")
-    if skill not in SKILLS:
+    if not _valid_skill_id(skill):
         raise ProtocolViolation("UNKNOWN_SKILL", f"skill: {skill}")
-    parameters = _object(intent["parameters"], "parameters")
-    _allowed_fields(parameters, ("targetPosition",), "parameters")
-    if skill != "PATROL" and "targetPosition" not in parameters:
-        raise ProtocolViolation(
-            "MISSING_REQUIRED", f"targetPosition for skill={skill}"
-        )
-    normalized_parameters: dict[str, Any] = {}
-    if "targetPosition" in parameters:
-        normalized_parameters["targetPosition"] = _position(
-            parameters["targetPosition"], "parameters.targetPosition"
-        )
+    parameters = _bounded_json(
+        _object(intent["parameters"], "parameters"),
+        "parameters",
+        depth=0,
+    )
 
     confidence = _number(intent, "confidence")
     if not 0.0 <= confidence <= 1.0:
@@ -320,20 +318,83 @@ def _intent(value: Any) -> dict[str, Any]:
         raise ProtocolViolation(
             "OUT_OF_RANGE", f"validForTicks: {valid_for_ticks}"
         )
-    policy_value = intent.get("interruptPolicy")
-    policy = (
-        None
-        if policy_value is None
-        else _interrupt_policy(policy_value)
-    )
+    policy = _interrupt_policy(intent["interruptPolicy"])
+    if not policy["respondToAdjacentThreat"]:
+        raise ProtocolViolation(
+            "OUT_OF_RANGE", "respondToAdjacentThreat must be true"
+        )
     return {
         "intentVersion": intent_version,
         "skill": skill,
-        "parameters": normalized_parameters,
+        "parameters": parameters,
         "confidence": confidence,
         "validForTicks": valid_for_ticks,
         "interruptPolicy": policy,
+        "planMetadata": _plan_metadata(intent["planMetadata"]),
     }
+
+
+def _plan_metadata(value: Any) -> dict[str, Any]:
+    metadata = _object(value, "planMetadata")
+    _exact_fields(metadata, ("planId", "stepId", "revision"), "planMetadata")
+    plan_id = _string(metadata, "planId")
+    step_id = _string(metadata, "stepId")
+    if not plan_id or len(plan_id) > MAX_STRING_CHARS:
+        raise ProtocolViolation("OUT_OF_RANGE", "planMetadata.planId")
+    if not step_id or len(step_id) > MAX_STRING_CHARS:
+        raise ProtocolViolation("OUT_OF_RANGE", "planMetadata.stepId")
+    revision = _integer(metadata, "revision", bits=32)
+    if revision < 0:
+        raise ProtocolViolation("OUT_OF_RANGE", "planMetadata.revision")
+    return {"planId": plan_id, "stepId": step_id, "revision": revision}
+
+
+def _valid_skill_id(skill: str) -> bool:
+    return (
+        1 <= len(skill) <= 64
+        and skill.isascii()
+        and "A" <= skill[0] <= "Z"
+        and all(character == "_" or character.isdigit()
+                or "A" <= character <= "Z" for character in skill)
+    )
+
+
+def _bounded_json(value: Any, context: str, *, depth: int) -> Any:
+    if depth > MAX_PARAMETER_DEPTH:
+        raise ProtocolViolation("DEPTH_EXCEEDED", context)
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        if not _INT64_MIN <= value <= _INT64_MAX:
+            raise ProtocolViolation("OUT_OF_RANGE", context)
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ProtocolViolation("JSON_SYNTAX", context)
+        return value
+    if isinstance(value, str):
+        if len(value) > MAX_STRING_CHARS:
+            raise ProtocolViolation("OUT_OF_RANGE", context)
+        return value
+    if isinstance(value, list):
+        if len(value) > MAX_ARRAY_ITEMS:
+            raise ProtocolViolation("OUT_OF_RANGE", context)
+        return [
+            _bounded_json(item, f"{context}[{index}]", depth=depth + 1)
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, dict):
+        if len(value) > MAX_OBJECT_KEYS:
+            raise ProtocolViolation("OUT_OF_RANGE", context)
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or not key or len(key) > MAX_STRING_CHARS:
+                raise ProtocolViolation("TYPE_MISMATCH", f"{context} key")
+            normalized[key] = _bounded_json(
+                item, f"{context}.{key}", depth=depth + 1
+            )
+        return normalized
+    raise ProtocolViolation("TYPE_MISMATCH", context)
 
 
 def _interrupt_policy(value: Any) -> dict[str, bool]:

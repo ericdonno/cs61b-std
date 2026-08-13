@@ -11,6 +11,7 @@ from ..protocol import (
     ProtocolViolation,
     validate_envelope,
 )
+from .base import ResponseEmitter
 
 
 class DeterministicAgent:
@@ -52,7 +53,7 @@ class DeterministicAgent:
         self, request: dict[str, Any]
     ) -> dict[str, Any]:
         observation = request["data"]
-        intent = self._decide(observation)
+        intent = self._decide(observation, observation["decisionId"])
         data = {
             "decisionId": observation["decisionId"],
             "observationSeq": observation["observationSeq"],
@@ -96,7 +97,8 @@ class DeterministicAgent:
         )
 
     @staticmethod
-    def _decide(observation: dict[str, Any]) -> dict[str, Any]:
+    def _decide(observation: dict[str, Any],
+                decision_id: str = "deterministic") -> dict[str, Any]:
         self_position = observation["self"]["position"]
         players = sorted(
             (
@@ -166,4 +168,47 @@ class DeterministicAgent:
                 "respondToAdjacentThreat": True,
                 "allowLocalReroute": skill != "ATTACK",
             },
+            "planMetadata": {
+                "planId": f"{decision_id}:plan",
+                "stepId": "intent-0",
+                "revision": 0,
+            },
         }
+
+
+class DeterministicBrain:
+    """RuntimeBrain adapter whose responses are serialized by the emitter."""
+
+    def __init__(self, emitter: ResponseEmitter) -> None:
+        self._emitter = emitter
+        self._closed = False
+        self.action_feedback: list[dict[str, Any]] = []
+        self.world_events: list[dict[str, Any]] = []
+
+    def on_message(self, envelope: dict[str, Any]) -> None:
+        if self._closed:
+            return
+        message = validate_envelope(envelope)
+        message_type = message["type"]
+        if message_type == "observation":
+            observation = message["data"]
+            self._emitter.emit_response(message, "submit_intent", {
+                "decisionId": observation["decisionId"],
+                "observationSeq": observation["observationSeq"],
+                "requestGeneration": observation["requestGeneration"],
+                "intent": DeterministicAgent._decide(
+                    observation, observation["decisionId"]
+                ),
+            })
+        elif message_type == "cancel_request":
+            self._emitter.emit_response(message, "cancel_ack", {
+                "decisionId": message["data"]["decisionId"],
+                "requestGeneration": message["data"]["requestGeneration"],
+            })
+        elif message_type == "action_feedback":
+            self.action_feedback.append(copy.deepcopy(message["data"]))
+        elif message_type == "world_event":
+            self.world_events.append(copy.deepcopy(message["data"]))
+
+    def close(self) -> None:
+        self._closed = True

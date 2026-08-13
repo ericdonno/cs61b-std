@@ -290,11 +290,13 @@ public final class EncounterHarness {
         }
         AgentProtocol.IntentData intent = new AgentProtocol.IntentData(
                 AgentProtocol.INTENT_VERSION,
-                AgentProtocol.Skill.PATROL,
+                "PATROL",
                 java.util.Collections.emptyMap(),
                 0.75,
                 10,
-                new AgentProtocol.InterruptPolicyData(true, true, true));
+                new AgentProtocol.InterruptPolicyData(true, true, true),
+                new AgentProtocol.PlanMetadataData(
+                        observation.decisionId() + ":plan", "intent-0", 0));
         AgentProtocol.SubmitIntentData response =
                 new AgentProtocol.SubmitIntentData(
                         observation.decisionId(),

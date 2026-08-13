@@ -3,23 +3,24 @@
 ## 0. 元数据
 
 - **Phase**：3
-- **状态**：Draft
-- **作者与审查者**：Codex 起草；Builder 审批
+- **状态**：Approved（具体模型服务接入延后）
+- **作者与审查者**：Codex 起草；Builder 于 2026-08-13 批准实施并裁决 provider 延后配置
 - **创建日期**：2026-08-02
-- **基线分支**：`ai-enemis`
-- **基线 HEAD**：`bbd5dae99a9827a87017b751b196c42c3ece436d`
-- **工作树状态**：Phase 2.5 Spec、Build Guide 与 Roadmap 已完成文档更新；Phase 2.5 实现尚未开始，本文不得把当前工作树当作 Phase 3 实现基线
-- **前一阶段 Completion**：`PHASE_2DOT5_COMPLETION.md`（Phase 2.5 验收后创建；Phase 3 的硬门禁）
+- **基线分支**：`result`
+- **基线 HEAD**：`e6befe6`（Phase 2.5 玩家输入节奏与巡视恢复已提交）
+- **工作树状态**：从干净的 `e6befe6` 创建 `result`；运行生成物已排除
+- **前一阶段 Completion**：`PHASE_2DOT5_COMPLETION.md`
 - **适用产品基准**：[PROJECT_INTENT_zh-CN.md](PROJECT_INTENT_zh-CN.md)、[DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md)、[AI_TICK_ARCHITECTURE.md](AI_TICK_ARCHITECTURE.md)
 - **配套实现指南**：[PHASE_3_BUILD_GUIDE.md](PHASE_3_BUILD_GUIDE.md)
 
-本文是拟议实现契约，不描述已经完成的 Phase 3 能力。Builder 批准本文前不得把状态改成
-`Approved`，也不得把真实模型、Tool Calling、checkpoint 或模型预算写入 Completion。
+本文是已批准的实现契约，不描述已经完成的 Phase 3 能力。Builder 明确要求具体 API/provider
+由其后续配置；本阶段实现 provider-neutral 接口、scripted model 与全部确定性边界，不引入
+任何具体 provider SDK，也不把未执行的真实 provider smoke 写成完成证据。
 
 ### 0.1 批准前置条件
 
-1. Builder 接受本文 6.1 节的锁定决定，尤其是首个 OpenAI 参考适配器、
-   `strategic-intent.v2` 硬切和 Python SQLite checkpoint。
+1. Builder 接受本文 6.1 节的锁定决定，尤其是 provider-neutral `ModelAdapter`、
+   `strategic-intent.v2` 硬切和 Python SQLite checkpoint；具体 provider/API 配置延后。
 2. [PHASE_2DOT5_SPEC.md](PHASE_2DOT5_SPEC.md) 与
    [PHASE_2DOT5_BUILD_GUIDE.md](PHASE_2DOT5_BUILD_GUIDE.md) 已全部实现并验收，且
    `PHASE_2DOT5_COMPLETION.md` 已记录通过证据。缺少该 Completion 时不得开始 Phase 3。
@@ -103,13 +104,10 @@ Phase 2.5 Completion 必须用实际实现替换这些旧事实。
   SQLite saver 适合本地、小规模同步工作流，并提供内部锁。
 - [PyPI: langgraph](https://pypi.org/project/langgraph/)、
   [langchain](https://pypi.org/project/langchain/)、
-  [langchain-openai](https://pypi.org/project/langchain-openai/)、
   [langgraph-checkpoint-sqlite](https://pypi.org/project/langgraph-checkpoint-sqlite/)、
   [pydantic](https://pypi.org/project/pydantic/)：用于记录本 Spec 创建时的稳定版本。
 - [Python `pylock.toml` 规范](https://packaging.python.org/en/latest/specifications/pylock-toml/)
   与 [pip lock](https://pip.pypa.io/en/stable/cli/pip_lock/)。
-- [LangChain ChatOpenAI](https://docs.langchain.com/oss/python/integrations/chat/openai)：
-  provider 包、`OPENAI_API_KEY`、tool calling 和 structured output 边界。
 
 版本事实只用于建立可重建基线。后续升级必须更新 lock、运行契约测试并记录实际版本，
 不能把 `latest` 当作可复现依赖。
@@ -126,7 +124,7 @@ Phase 2.5 Completion 必须用实际实现替换这些旧事实。
 ## 2. 阶段目标与成功定义
 
 本阶段结束后，显式启用 model brain 的单个 Enemy 能在独立 Python runtime 中加载自己的
-checkpoint，通过真实模型执行至少一次“模型 → 只读工具 → 模型 → 结构化意图”的条件循环，
+checkpoint，通过脚本化 adapter 执行至少一次“模型接口 → 只读工具 → 模型接口 → 结构化意图”的条件循环，
 再把 `strategic-intent.v2` proposal 交给现有 Java Session。Java 通过技能注册表、知识边界和
 当前世界前提二次校验，把已支持 skill 确定性地规划为原子 Action；未知、非法、过期或不可达
 proposal 无副作用地拒绝。多个 Enemy 可共享模型服务和全局调度器，但 checkpoint、消息、
@@ -176,8 +174,8 @@ proposal 无副作用地拒绝。多个 Enemy 可共享模型服务和全局调�
 
 - 保持 Phase 2.5 的 `agent-session.v1` Envelope 与 Session 状态机不变，只硬切 intent payload。
 - 默认 normal 模式继续使用 deterministic brain；真实模型必须由显式 `--brain model` 开启。
-- 首个参考 provider 使用 `langchain-openai`，但模型 ID 必须由启动配置提供，不在源码中追逐
-  “latest” alias。
+- graph 只依赖 provider-neutral `ModelAdapter`。具体 provider、SDK、模型 ID 与凭据由 Builder
+  后续配置，不在本阶段写死或安装。
 - 本地小规模 checkpoint 使用 SQLite；测试使用 `InMemorySaver`，不引入向量数据库。
 - Python model trace 单独记录模型和工具事实，并通过现有身份字段与 Java
   `agent-runtime.trace.v3` 关联；Phase 3 不向 Session 新增 trace 消息类型。
@@ -203,7 +201,7 @@ Phase 4 的持续反馈驱动重规划、多步骤执行和 plan/step outcome �
 
 ### 5.1 In Scope
 
-- Python 3.14、LangGraph、LangChain、provider adapter、Pydantic、SQLite checkpointer 的声明与锁定。
+- Python 3.14、LangGraph、LangChain、Pydantic、SQLite checkpointer 的声明与锁定。
 - 可替换 `RuntimeBrain`/factory/emitter 接口，保留 deterministic brain。
 - 每连接独立 model brain 与按 `worldId/floorId/agentId` 隔离的 graph thread。
 - 条件 Tool Calling loop、至少一个证据工具、终止 proposal 工具、最大轮数和 deadline。
@@ -214,7 +212,8 @@ Phase 4 的持续反馈驱动重规划、多步骤执行和 plan/step outcome �
 - 遭遇级全局 inference scheduler：并发、队列、调用、token 预算。
 - Python runtime trace 和现有 Java trace 的关联规范。
 - Phase 2.5 的朝向、`hp/maxHp`、`visionMode` 和可见实体作为模型与只读工具的唯一感知输入。
-- deterministic graph/model double 测试、真实 Python 进程 integration 和一次凭据化真实模型 smoke。
+- deterministic graph/model double 测试、真实 Python 进程 scripted integration，以及可注入的
+  provider-neutral adapter contract。
 
 ### 5.2 Out of Scope
 
@@ -258,11 +257,12 @@ LangGraph `thread_id` 必须由 `worldId/floorId/agentId` 无歧义编码。`run
 不保存完整世界、不保存其他 Agent 信息、不无限累积 raw messages。SQLite 中的旧 floor 行可以作为
 调试证据保留，但新 floor key 永远不可读取它；物理清理策略交给 Phase 6。
 
-#### D3-05：首个参考 provider 是 OpenAI，模型 ID 显式配置
+#### D3-05：具体 provider 由 Builder 后续配置
 
-默认依赖组包含 `langchain-openai`。`--brain model` 必须同时取得非空模型 ID 和
-`OPENAI_API_KEY`，否则在 ready 前失败。源码、配置样例、trace 和测试 fixture 均不得包含 API key。
-不把可变 `latest` alias 固定为验收模型；Completion 记录实际 model ID 或 snapshot。
+默认依赖不包含任何 provider SDK。graph 只依赖 `ModelAdapter`；scripted adapter 进入默认验收。
+真实 `--brain model` 在未配置 provider adapter、模型 ID 与凭据时必须在 ready 前明确失败，不能
+静默切回 deterministic。源码、配置样例、trace 和 fixture 均不得包含 API key。完成确定性实现后，
+必须提醒 Builder 配置其实际 API，再单独执行真实 smoke。
 
 #### D3-06：连接读循环与模型任务分离
 
@@ -334,14 +334,14 @@ wall-clock、provider request ID 和自由 reasoning 只作 diagnostics。Java �
 |------|----------|----------------|
 | Python 3.14.6 与锁定包组合可在 Windows 安装 | 新建干净 venv，从 lock 安装并运行 import smoke | 调整版本或 Python 约束，重新生成 lock；不得跳过 lock |
 | SQLite saver 足以承载当前少量 Enemy | 双 Agent 并发 graph contract 和短遭遇 integration | 只替换 `CheckpointStore`；不得改 Session 或共享 state |
-| provider 返回 usage metadata | provider adapter contract test + credentialed smoke | token 预算改为预留上限并将实际值记为 unavailable；不得无限调用 |
+| provider 返回 usage metadata | provider adapter contract test + 后续真实 smoke | token 预算改为预留上限并将实际值记为 unavailable；不得无限调用 |
 | 8 秒 Python deadline 小于当前 Java 10 秒 hard deadline | 启动时比较配置 | 修改 runtime 配置，不修改 Java 时效语义 |
 | 四个现有 skill 足以证明 registry seam | 固定单守卫场景与 Java registry tests | 仅新增一个最小示范 skill，需先更新本 Spec 范围 |
 
 ### 6.3 已采用的施工默认值
 
-- 首个参考 provider 固定为 `langchain-openai`；模型 ID 由运行者显式给出。以后替换 provider 只能修改
-  adapter 与依赖锁，不改变 graph、Session、registry 或测试 doubles。
+- provider SDK、模型 ID、鉴权环境变量名和真实 smoke 命令留给 Builder 配置。接入时只能增加具体
+  adapter 与相应依赖锁，不改变 graph、Session、registry 或测试 doubles。
 - Phase 3 必须从 Phase 2.5 Completion 记录的最终 commit 或完整工作树基线起步。优先使用干净 commit；
   若因在研工作无法提交，Completion 必须记录可复查的起始 diff，不能继续引用本文创建时的旧 HEAD。
 
@@ -359,7 +359,7 @@ flowchart LR
     B --> G["每 Agent LangGraph"]
     G --> C["SQLite checkpointer\nthread_id = world/floor/agent"]
     G --> S["全局 InferenceScheduler"]
-    S --> M["ModelAdapter\nOpenAI reference"]
+    S --> M["ModelAdapter\nprovider-neutral"]
     M --> G
     G --> T["只读 ToolNode"]
     T --> G
@@ -425,7 +425,6 @@ tool runtime 和结果身份不能共享。Java 仍是从 proposal 到世界变�
 | Python | `>=3.14,<3.15` | 与 Phase 2 验收环境一致 |
 | `langgraph` | `1.2.10` | StateGraph、ToolNode、checkpointer 接口 |
 | `langchain` | `1.3.14` | messages、tools、model abstraction |
-| `langchain-openai` | `1.3.5` | 首个参考 provider adapter |
 | `langgraph-checkpoint-sqlite` | `3.1.0` | 本地持久 checkpoint |
 | `pydantic` | `2.13.4` | graph DTO、tool args、intent schema |
 
@@ -655,7 +654,6 @@ Python CLI 新增稳定领域参数：
 
 ```text
 --brain deterministic|model
---model <provider model id>
 --checkpoint-db <path>
 --runtime-trace <path>
 --decision-timeout-seconds 8
@@ -682,7 +680,7 @@ Python CLI 新增稳定领域参数：
 
 | 文件 | 新建/修改 | 责任 | 关键变更 | 不应包含 |
 |------|-----------|------|----------|----------|
-| `agent/python/pyproject.toml` | 新建 | Python 项目与直接依赖 | 固定 Python/五个直接包、测试入口元数据 | secret、浮动 latest |
+| `agent/python/pyproject.toml` | 新建 | Python 项目与直接依赖 | 固定 Python/四个直接包、测试入口元数据 | secret、具体 provider SDK |
 | `agent/python/pylock.toml` | 新建 | 可重复安装 | pip 生成的完整 lock + hashes | 手工删减 transitive 包 |
 | `.gitignore` | 修改 | 本地运行产物隔离 | `.venv`、SQLite、runtime trace、`.env` | 忽略源码或 fixtures |
 | `agent/python/dungeonmind_agent/config.py` | 新建 | CLI/env 配置校验 | brain、model、deadline、tool/scheduler/budget | API key 值日志 |
@@ -695,7 +693,6 @@ Python CLI 新增稳定领域参数：
 | `graph/workflow.py` | 新建 | StateGraph 与条件边 | tool loop、轮数/deadline/终止 | 无限循环、黑盒 create_agent |
 | `checkpoint.py` | 新建 | saver 生命周期 | InMemory 测试、SQLite 生产、严格序列化 | 向量 DB、跨 floor lookup |
 | `model/adapter.py` | 新建 | provider-neutral 调用接口 | usage、错误分类、cancel token | Agent state |
-| `model/openai_adapter.py` | 新建 | ChatOpenAI 参考实现 | 显式 model、tool binding、usage metadata | 默认 secret/model latest |
 | `model/scheduler.py` | 新建 | 全局推理资源 | 并发、队列、预算、取消、关闭 | prompt 合并、上下文共享 |
 | `observability.py` | 新建 | Python model trace | `agent-model.trace.v1`、sink、字段脱敏 | raw reasoning、API key |
 | `server.py` | 修改 | 连接/reader/emitter 生命周期 | factory、非阻塞 model dispatch、有序写、cancel 可读 | provider 逻辑 |
@@ -719,11 +716,10 @@ Python CLI 新增稳定领域参数：
 | `byog/Trace/AgentTrace.java` | 修改 | Java 侧新增稳定关联字段 | `agent-runtime.trace.v3`、skillId、planId、stepId | raw prompt/reasoning/token 明细 |
 | `agent/contract/fixtures/` | 修改 | 跨语言 v2 样例 | 合法/非法 payload、旧版拒绝与 canonical JSON | v1 兼容 fixture、gameplay golden |
 | `agent/python/tests/` | 修改/新建 | Python contracts | graph、state、tools、scheduler、cancel、v2 hard cut | 默认真实 API |
-| `byog/Test/AgentIntentContractTest.java` | 新建 | v2 Java contract | codec、fixture 与旧版拒绝 | Phase 编号类名 |
+| `byog/Test/AgentProtocolContractTest.java` | 修改 | v2 Java contract | codec、fixture 与旧版拒绝 | 开发阶段编号类名 |
 | `byog/Test/TacticalSkillRegistryTest.java` | 新建 | registry/authority | 参数、知识、可达、执行 | 复制 planner |
 | `byog/Test/AgentRuntimeTestSuite.java` | 新建 | 单一 deterministic gate | 直接列 leaf tests 一次 | Suite 嵌套 |
-| `byog/Test/ModelRuntimeIntegrationTest.java` | 新建 | 真实 Python 进程 + scripted model | graph、cancel、budget、trace | 默认真实 provider |
-| `agent/python/model_smoke.py` | 新建 | 凭据化真实模型 smoke | 一次有界 tool loop 与 proposal 证据 | 自动计费循环 |
+| `byog/Test/AgentRuntimeIntegrationTest.java` | 修改 | 真实 Python 进程 + scripted adapter | graph、cancel、budget、trace | 默认真实 provider |
 
 ## 10. 实施顺序
 
@@ -778,18 +774,18 @@ Python CLI 新增稳定领域参数：
 - **验证**：两个 Agent 上下文不共享；并发/队列/调用/token 都不超过配置；队列满不阻塞 reader。
 - **artifact**：遭遇级推理资源边界。
 
-### Step 3.8：接入 OpenAI adapter 与 trace
+### Step 3.8：固定 provider-neutral adapter contract 与 trace
 
 - **输入**：deterministic graph contracts 全通过。
-- **改动**：ChatOpenAI adapter、model config 与 `agent-model.trace.v1`；真实 provider 尚不进入默认 gate。
-- **验证**：无 key 时 ready 前失败；adapter contract、错误分类、usage 与 trace 脱敏通过 deterministic doubles。
-- **artifact**：可由显式配置启用且能被阶段 3.9 端到端验证的 provider seam。
+- **改动**：`ModelAdapter`、scripted adapter、model config seam 与 `agent-model.trace.v1`；不安装具体 provider SDK。
+- **验证**：未配置 provider 时 model 模式 ready 前失败；adapter contract、错误分类、usage 与 trace 脱敏通过 doubles。
+- **artifact**：后续只需增加具体 adapter 与凭据配置即可启用的 provider seam。
 
 ### Step 3.9：生产接线、回归与交接
 
 - **输入**：所有模块 artifact。
-- **改动**：Java/Python 生产接线、README/architecture、默认 gate、scripted integration、一次显式真实 smoke 与 Completion。
-- **验证**：第 11.5 节命令；固定单守卫真实 smoke；Phase 2.5 Completion 的全部领域回归与五种故障模式通过。
+- **改动**：Java/Python 生产接线、README/architecture、默认 gate、scripted integration 与 Completion。
+- **验证**：第 11.5 节命令；Phase 2.5 Completion 的全部领域回归与五种故障模式通过；真实 smoke 等 Builder 配置 API 后另行执行。
 - **artifact**：`PHASE_3_COMPLETION.md` 与 Phase 4 输入。
 
 ## 11. 测试与验收矩阵
@@ -799,8 +795,8 @@ Python CLI 新增稳定领域参数：
 | 项目 | 本阶段决定 |
 |------|------------|
 | 单一 deterministic 入口 | Java `AgentRuntimeTestSuite` 直接列所有 leaf class；Python unittest discovery；不嵌套旧 Suite |
-| integration 入口 | `ModelRuntimeIntegrationTest` 独立启动真实 Python/TCP，但使用 scripted model；每步和总进程都有界 |
-| credentialed smoke | `model_smoke.py` 单独运行，不进默认 CI；必须显式 model/key，最多一次决策 |
+| integration 入口 | `AgentRuntimeIntegrationTest` 独立启动真实 Python/TCP，并覆盖 scripted adapter；每步和总进程都有界 |
+| provider smoke | 不进入本阶段默认 gate；实现完成后提醒 Builder 配置其实际 API，再按 adapter 文档执行一次有界 smoke |
 | shared fixture | `agent/contract/fixtures` 是 v2 唯一跨语言 payload 样例，并含旧版拒绝样例；现有 EncounterHarness 仍是 Java tick coordinator |
 | production seam | Game/Enemy 继续使用真实 AiTickLoop/Session；测试不复制 tick 或用反射访问私有方法 |
 | model double | scripted tool-calling model 实现 ModelAdapter，不复制 graph/ToolNode/validator |
@@ -865,7 +861,7 @@ Python CLI 新增稳定领域参数：
 | TRACE-CORRELATION-02 | budget/failure/fallback | 原因类型化且能关联 Java takeover | 自动 | INV-08 |
 | TRACE-CORRELATION-03 | 双 Agent | runtime trace 不混 agentId/thread_id | 自动 | INV-01/08 |
 | TRACE-CORRELATION-04 | secret/reasoning 审计 | 无 API key、raw prompt、完整自由 reasoning | 自动/审计 | D3-15 |
-| MODEL-SMOKE-01 | 显式凭据化单请求 | 真实 provider 至少一次 tool round，v2 intent 被 Java 接受并执行 | 人工/有界脚本 | 阶段成功定义 |
+| PROVIDER-CONFIG-01 | Builder 后续配置实际 API | 真实 provider 至少一次 tool round，v2 intent 被 Java 接受并执行；未配置前标记未验证 | 人工/有界脚本 | provider 兼容证据 |
 | REGRESSION-01 | Phase 2.5 Completion 的 deterministic/integration commands | 命名存档、跨层 HP、血包、朝向/FOV、巡视、UI、contract/no-cheat 与 runtime 回归均通过 | 自动 | 前置基线 |
 | REGRESSION-02 | bridge disabled | 不创建 provider/scheduler 调用，本地游戏行为继续 | 自动 | D3-01/14 |
 
@@ -894,14 +890,12 @@ java "-Dfile.encoding=UTF-8" `
 # 真实 Python 进程 + scripted model integration
 java "-Dfile.encoding=UTF-8" `
     -cp "out;..\library-sp18\javalib\*" `
-    org.junit.runner.JUnitCore byog.Test.ModelRuntimeIntegrationTest
+    org.junit.runner.JUnitCore byog.Test.AgentRuntimeIntegrationTest
 
-# 凭据化 smoke：只在显式配置真实 provider 时运行
-& agent/python/.venv/Scripts/python.exe agent/python/model_smoke.py `
-    --model $env:DUNGEONMIND_MODEL
+# 真实 provider smoke：待 Builder 配置实际 API/adapter 后，按对应 adapter 文档执行
 ```
 
-`MODEL-SMOKE-01` 不进入默认 gate，也不得在 CI 中因没有付费凭据而失败。
+`PROVIDER-CONFIG-01` 不进入默认 gate；未配置 API 时必须记录为未验证，不得伪造通过。
 
 ## 12. Observability 与运行证据
 
@@ -953,7 +947,7 @@ Python `agent-model.trace.v1` 与 Java v3 至少通过 `worldId/runId/floorId/ag
 - 依赖 lock 的 hash 或 Git blob ID、Python/pip/package 实际版本。
 - deterministic Java/Python 测试数与结果。
 - scripted integration 的 runtime trace 与 Java trace 关联片段。
-- credentialed smoke 的 model ID、调用数、token、耗时、工具名和最终 Java validation；不保存 secret。
+- 若 Builder 已配置实际 API，则记录 model ID、调用数、token、耗时、工具名和最终 Java validation；否则明确记为未验证。
 - 并发、队列、call/token budget 的峰值与拒绝证据。
 - cancellation、provider failure 和 Java fallback 的关联证据。
 
@@ -1055,8 +1049,8 @@ Python `agent-model.trace.v1` 与 Java v3 至少通过 `worldId/runId/floorId/ag
 - [ ] Java `AgentRuntimeTestSuite` 是 leaf-only、无嵌套、无重复计数的默认 deterministic gate。
 - [ ] deterministic tests 不使用真实网络、GUI、默认存档或 `Thread.sleep()`。
 - [ ] integration tests 有总超时、进程清理、端口 0 和可定位状态。
-- [ ] credentialed `MODEL-SMOKE-01` 证明真实模型—工具—模型—intent—Java Action 闭环。
-- [ ] bridge disabled、Python 失败和无 API key 均不会破坏本地游戏。
+- [ ] scripted model 证明模型—工具—模型—intent—Java Action 闭环；真实 provider smoke 等 Builder 配置 API 后补验。
+- [ ] bridge disabled、Python 失败和 provider 未配置均不会破坏本地游戏。
 - [ ] 默认 gate 输出简洁，生产 DEBUG/INFO 不灌入成功日志。
 - [ ] 没有引入多 Agent 共享上下文、通信、向量记忆或复杂多步计划。
 - [ ] 自动化命令、测试数、耗时、model ID、token/预算证据和已知偏差已记录。
@@ -1067,14 +1061,14 @@ Python `agent-model.trace.v1` 与 Java v3 至少通过 `worldId/runId/floorId/ag
 
 ### 16.1 Phase 4 可以依赖
 
-- 可重建的 Python/LangGraph/provider 依赖与 lock。
+- 可重建的 Python/LangGraph/checkpointer 依赖与 lock，以及 provider-neutral adapter contract。
 - 每 Agent `worldId/floorId/agentId` checkpoint thread 和有界 graph state。
 - 有界、可取消、可追踪的 model/tool loop。
 - `strategic-intent.v2`、planId/stepId/revision 与严格旧版拒绝。
 - immutable Java `TacticalSkillRegistry`、四个 built-in skill 和 detailed validation。
 - encounter 级 scheduler/budget 和 provider usage trace。
 - scripted model、checkpoint、scheduler、跨语言 fixture 和真实进程 harness。
-- 真实模型 smoke 的 model/tool/intent/action 关联证据。
+- scripted model 的 model/tool/intent/action 关联证据；真实 provider 证据待配置后补充。
 
 ### 16.2 Phase 4 不得假设
 
@@ -1101,7 +1095,7 @@ Python `agent-model.trace.v1` 与 Java v3 至少通过 `worldId/runId/floorId/ag
 - [x] 已区分当前事实、设计推断、拟议决定和未来 Phase。
 - [x] 已记录 Roadmap 状态与当前实现的冲突。
 - [x] 已给出数据所有权、接口、逐文件计划、实施顺序和失败路径。
-- [x] 已定义 leaf-only 默认 gate、独立 integration 和 credentialed smoke。
+- [x] 已定义 leaf-only 默认 gate、独立 scripted integration 和延后的 provider smoke。
 - [x] 已避免在拟议生产标识符中使用开发阶段编号。
 - [x] 已把真实模型文本排除在 canonical golden 之外。
 - [x] 已明确下一阶段可以依赖与不得假设的事项。

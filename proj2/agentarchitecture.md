@@ -1,14 +1,14 @@
 # DungeonMind 外部 Agent Runtime 架构
 
-> 状态：外部 Agent 目录边界、Python 确定性 runtime 与扩展边界说明
+> 状态：外部 Agent 目录边界、确定性/runtime graph 双路径与 Java 权威技能接线说明
 >
-> 更新时间：2026-08-02
+> 更新时间：2026-08-13
 >
 > 范围：跨语言目录、Python codec、TCP server、每连接大脑、消息语义、
-> 故障模式、进程生命周期、未来 TypeScript 与模型大脑扩展
+> 故障模式、进程生命周期、LangGraph/checkpoint/scheduler 与未来供应商适配
 >
 > 不展开：`AgentSession` 内部 deadline 状态机、Java `SocketTransport` 实现细节、
-> 真实模型调用、Tool Calling 和多 Agent 协作
+> 具体模型供应商 SDK、提示词内容和多 Agent 协作
 
 ---
 
@@ -44,7 +44,7 @@
 | CLI（命令行入口） | 通过终端参数启动和配置 runtime 的程序接口，这里是 `run.py` |
 | factory（工厂） | 根据连接上下文创建一个 Brain 实例的组件，避免 server 写死具体大脑类型 |
 | provider / SDK（模型服务商 / 开发工具包） | 提供大模型推理服务的一方，以及调用该服务的客户端代码库 |
-| Tool Calling（工具调用） | 模型请求程序执行已注册工具的机制；当前尚未接入 |
+| Tool Calling（工具调用） | 模型请求程序执行已注册工具的机制；当前 graph 只开放私有观察查询和意图提交工具 |
 | canonical evidence（权威运行证据） | 可稳定关联游戏因果的数据；线程名、现实耗时和日志顺序不属于它 |
 | stdout / stderr（标准输出 / 标准错误） | stdout 输出机器可读 ready 信号；stderr 输出供人诊断的日志 |
 | epoch / generation（连接代次 / 请求代次） | 分别隔离旧连接消息和已经失效的旧请求结果 |
@@ -59,13 +59,15 @@
 | 跨语言目录边界 | **已实现** | `agent/contract`、`agent/python`、`agent/typescript` 按契约和语言实现分离 |
 | Python 严格 codec | **已实现** | 校验 UTF-8、frame、JSON、字段集合、类型、版本、枚举和数值范围 |
 | 多连接 TCP server | **已实现** | 使用 `ThreadingTCPServer`，每条连接由独立 handler thread 服务 |
-| 每连接独立大脑 | **已实现** | 每个 handler 创建自己的 `DeterministicAgent` 和 outbound `messageSeq` |
+| 每连接独立大脑 | **已实现** | factory 为每个 handler 创建独立 brain；emitter 独占 outbound `messageSeq` |
 | 确定性战略决策 | **已实现** | 相邻玩家 `ATTACK`、可见玩家 `CHASE`、否则确定性 `PATROL` |
 | cancel/feedback/event | **已实现** | cancel 返回 ack；feedback 和 event 在连接内记录 |
 | 五种故障模式 | **已实现** | `normal`、`delay`、`malformed`、`disconnect`、`no-read` |
 | 结构化 ready 信号 | **已实现** | bind 成功后向 stdout 写出单行 JSON |
-| 可插拔 brain factory | **未实现** | server 当前直接构造 `DeterministicAgent` |
-| 真实模型大脑 | **未实现** | 不调用 LLM、LangGraph、工具、记忆或外部网络 |
+| 可插拔 brain factory | **已实现** | `deterministic` 与 `scripted` 通过同一 factory/emitter seam 组合 |
+| 有状态 graph 大脑 | **已实现** | LangGraph、只读工具、checkpoint、取消和全局 scheduler 由脚本 adapter 可重复驱动 |
+| 真实模型供应商 | **待配置** | 只定义 `ModelAdapter`；未引入具体 SDK，也不读取 API key |
+| Java 技能权威 | **已实现** | intent v2 统一进入 immutable `TacticalSkillRegistry` 校验、转换、规划和恢复 |
 | TypeScript runtime | **未实现** | 只有稳定目录边界和职责约定 |
 | Game/Enemy 生产接线 | **已实现** | poll/collect/close 接入 Session；Game 管理新局、读档、换层和退出生命周期 |
 
@@ -256,14 +258,18 @@ flowchart LR
     subgraph PYTHON["Python Agent 进程"]
         CLI["run.py"]
         SERVER["AgentRuntimeServer<br/>listener / mode / stop_event"]
-        HANDLER["AgentRequestHandler<br/>one thread per connection"]
+        HANDLER["AgentRequestHandler<br/>reader stays available"]
         CODEC_P["protocol.py<br/>strict validation"]
-        BRAIN["DeterministicAgent<br/>connection-local state"]
+        FACTORY["BrainFactory + ResponseEmitter"]
+        BRAIN["DeterministicBrain / GraphAgentBrain"]
+        GRAPH["LangGraph + observation tools<br/>checkpoint / scheduler"]
 
         CLI --> SERVER
         SERVER --> HANDLER
         HANDLER --> CODEC_P
-        CODEC_P --> BRAIN
+        CODEC_P --> FACTORY
+        FACTORY --> BRAIN
+        BRAIN --> GRAPH
         BRAIN --> CODEC_P
     end
 
@@ -296,16 +302,17 @@ Python runtime 只负责解码、决策和编码；Java 仍负责身份时效、
 
 ## 4. 进程、线程与数据所有权
 
-### 4.1 四类执行上下文
+### 4.1 五类执行上下文
 
 | 执行上下文 | 所在进程 | 当前职责 |
 |------------|----------|----------|
 | Game thread | Java | 世界更新、Session game-thread API、仲裁和动作 |
 | SocketTransport worker | Java | connect/read/write/codec/enqueue |
 | server 主线程 | Python | bind、ready、accept 调度、关闭 listener |
-| connection handler thread | Python | 一条 TCP 连接的读、校验、决策和写回 |
+| connection handler thread | Python | 持续读协议消息，把决策交给 brain，并让 cancel 在推理期间仍可到达 |
+| graph worker | Python | 执行一个有界决策图；不能直接写 socket |
 
-正常往返跨越四个执行上下文：
+脚本化 graph 的正常往返跨越五个执行上下文：
 
 ```mermaid
 sequenceDiagram
@@ -313,37 +320,42 @@ sequenceDiagram
     participant J as Java SocketTransport worker
     participant H as Python handler thread
     participant C as Python protocol codec
-    participant B as Connection-local Brain
+    participant B as Connection-local Brain / emitter
+    participant W as Graph worker
 
     G->>J: enqueue 后由 worker 取出 observation
     J->>H: TCP NDJSON frame
     H->>C: decode_frame(bytes)
     C-->>H: validated envelope
-    H->>B: handle(observation)
-    B-->>H: submit_intent candidate
-    H->>C: encode_frame(response)
-    C-->>H: validated UTF-8 NDJSON
-    H->>J: TCP response
+    H->>B: on_message(observation)
+    B->>W: submit bounded decision task
+    W-->>B: validated intent candidate
+    B->>C: emitter encode_frame(response)
+    C-->>B: validated UTF-8 NDJSON
+    B->>J: serialized TCP response
     J-->>G: inbound queue，等待 game-thread poll
 ```
 
 Python handler 不调用 Game thread；Java worker 也不直接调用 brain。
 
 Python 使用 `socketserver.ThreadingTCPServer`。每个连接对应一个
-`AgentRequestHandler`，每个 handler 创建一个 `DeterministicAgent`：
+`AgentRequestHandler`，factory 创建连接私有 brain；graph worker 和 scheduler 是受限共享服务：
 
 ```mermaid
 flowchart TB
     SERVER["AgentRuntimeServer"]
     HA["handler thread A"]
     HB["handler thread B"]
-    AA["DeterministicAgent A<br/>messageSeq 0,1,2..."]
-    AB["DeterministicAgent B<br/>messageSeq 0,1,2..."]
+    AA["Brain A + emitter A<br/>messageSeq 0,1,2..."]
+    AB["Brain B + emitter B<br/>messageSeq 0,1,2..."]
+    SCHED["shared scheduler<br/>concurrency + encounter budget"]
 
     SERVER --> HA
     SERVER --> HB
     HA --> AA
     HB --> AB
+    AA --> SCHED
+    AB --> SCHED
 ```
 
 ### 4.2 不共享的连接状态
@@ -356,9 +368,12 @@ flowchart TB
 - `cancelled_decisions`；
 - 将来的模型对话、工作记忆或工具状态。
 
-当前 server 级共享状态只有：
+server 级可以共享、但不能读取 Agent 状态的资源只有：
 
-- `mode`；
+- `mode` 与不可变 runtime 配置；
+- graph worker executor；
+- 只保存并发/队列/遭遇预算的 scheduler；
+- checkpoint saver（记录按 `worldId/floorId/agentId` thread ID 隔离）；
 - `delay_seconds`；
 - `max_frame_bytes`；
 - `stop_event`；
@@ -505,12 +520,11 @@ stop_server(server)
 
 | 层 | 值 |
 |----|----|
-| Envelope | `phase2.session.v1` |
-| Observation payload | `private-observation.v1` |
-| Intent payload | `strategic-intent.v1` |
+| Envelope | `agent-session.v1` |
+| Observation payload | `private-observation.v2` |
+| Intent payload | `strategic-intent.v2` |
 
-Envelope 版本名称包含历史阶段编号。它已经成为 Java/Python wire 兼容值，不能只在
-一端重命名。新类型、方法和日志仍必须使用稳定领域命名。
+这些版本在 Java/Python 间一次性硬切；旧 payload 不双读，也不能只修改一端。
 
 ### 6.2 Frame 契约
 
@@ -1232,7 +1246,7 @@ Python 不能被调用在 world commit 之前观察“半提交”状态，也�
 
 ---
 
-## 14. 真实模型大脑的扩展路径
+## 14. 接入真实模型供应商
 
 ### 14.1 不要直接替换 server.py 为模型脚本
 
@@ -1249,47 +1263,35 @@ brain/
   = 根据 validated observation 产生 intent
 ```
 
-真实模型实现应进入：
+供应商适配实现应进入：
 
 ```text
-agent/python/dungeonmind_agent/brain/
-  deterministic.py
-  model_agent.py        # 示例职责名，实际按领域命名
+agent/python/dungeonmind_agent/model/
+  adapter.py            # 已实现的稳定调用契约
+  <provider_adapter>.py # Builder 后续选择的具体实现
 ```
 
-### 14.2 需要补出的稳定接口
+### 14.2 已存在的稳定接口
 
-当前 server 直接写死：
+当前 `ModelAdapter` 把供应商调用限制为：
 
 ```text
-agent = DeterministicAgent()
+ModelInput -> ModelResponse(tool_calls, usage)
 ```
 
-在出现第二种 brain 前，应提取最小接口和 factory，例如概念上的：
+`BrainFactory` 已按连接创建 `DeterministicBrain` 或 `GraphAgentBrain`，结果只能经
+`ResponseEmitter` 串行写回。接口不暴露 Socket、Java 对象或完整 world。
 
-```text
-Brain.handle(validated_envelope) -> list[validated_envelope]
-BrainFactory.create(connection_context) -> Brain
-```
+### 14.3 尚待具体供应商完成
 
-接口不应暴露 Socket、handler、Java 对象或完整 world。factory 必须保证每连接创建
-独立实例，除非未来明确设计只读共享模型资源与隔离会话状态。
+- 把所选供应商的请求/响应映射到 `ModelAdapter`，不改变 graph 和 Java registry；
+- 在 ready 前校验该供应商要求的模型 ID、endpoint 和凭据是否存在；
+- 把供应商 usage 映射为 `ModelUsage`，保留 scheduler 的预留与结算语义；
+- 对 transient、permanent、timeout 和 cancel 使用现有类型化错误；
+- 单独运行真实 provider smoke，不让默认测试访问网络或产生费用。
 
-### 14.3 模型大脑额外需要解决
-
-- single in-flight 与取消；
-- 推理超时和资源释放；
-- 模型输出到 intent DTO 的严格转换；
-- prompt 只包含私有 observation；
-- API key 和 provider 配置隔离；
-- 工具白名单与副作用边界；
-- 连接断开后的任务取消；
-- restart 后不恢复无效 request；
-- 模型并发、速率限制和成本；
-- 诊断日志与 canonical evidence 分离。
-
-Java deadline 到期并不自动取消 Python provider 请求；Python 需要利用
-`cancel_request` 尽力停止资源消耗，但即使停止失败，Java generation 仍保证旧结果
+reader 已在推理期间处理 `cancel_request`，graph brain 会抑制迟到结果；具体 SDK 如果支持
+请求级取消，还应在 adapter 内转发。即使供应商不支持强制中止，Java generation 仍保证旧结果
 不能重新获得控制权。
 
 ---
