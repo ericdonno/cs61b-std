@@ -106,7 +106,7 @@ public class PatrolControllerTest {
         return new Fixture(world, em, enemy, player);
     }
 
-    // ---------- P25-PATROL-01 持续同一目标 ----------
+    // ---------- 目标持续性 ----------
 
     @Test
     public void targetStaysStableWhileTraveling() {
@@ -139,7 +139,7 @@ public class PatrolControllerTest {
         }
     }
 
-    // ---------- P25-PATROL-02 相同脚本重复 ----------
+    // ---------- 相同脚本重复 ----------
 
     @Test
     public void sameScriptRepeatsSameTrace() {
@@ -172,7 +172,7 @@ public class PatrolControllerTest {
         return trace;
     }
 
-    // ---------- P25-PATROL-03 到达停留与顺时针扫描 ----------
+    // ---------- 到达停留与顺时针扫描 ----------
 
     @Test
     public void reachingTargetWaitsThenScansClockwise() {
@@ -224,7 +224,50 @@ public class PatrolControllerTest {
         assertNotNull(reselect);
     }
 
-    // ---------- P25-PATROL-04 动态实体阻挡 ----------
+    @Test
+    public void emptyCandidateViewTurnsUntilPatrolCanResume() {
+        TETile[][] world = new TETile[9][9];
+        for (int x = 0; x < world.length; x++) {
+            for (int y = 0; y < world[0].length; y++) {
+                world[x][y] = Tileset.NOTHING;
+            }
+        }
+        Position[] corridor = {
+            new Position(2, 5), new Position(3, 5),
+            new Position(3, 4), new Position(4, 4),
+            new Position(4, 3), new Position(5, 3)
+        };
+        for (Position tile : corridor) {
+            world[tile.x][tile.y] = Tileset.FLOOR;
+        }
+        world[0][0] = Tileset.FLOOR;
+
+        EntityManager em = new EntityManager();
+        Enemy enemy = enemyAt(2, 5, Facing.NORTH);
+        em.addEntity(enemy);
+        Player player = new Player(new Position(0, 0), config());
+        em.addEntity(player);
+        PatrolState state = new PatrolState();
+        state.setMode(PatrolState.Mode.SCANNING);
+        state.setScanTurnsRemaining(0);
+        PatrolController controller = new PatrolController();
+
+        PatrolController.PatrolDecision faceWall = controller.decide(
+                observe(world, em, enemy, player), state,
+                SEED_KEY, FLOOR_ID, enemy.getAgentId());
+        assertEquals("no candidates must keep scanning instead of freezing",
+                PatrolController.PatrolDecision.Kind.TURN, faceWall.kind());
+
+        enemy.setFacing(enemy.getFacing().clockwise());
+        PatrolController.PatrolDecision resumed = controller.decide(
+                observe(world, em, enemy, player), state,
+                SEED_KEY, FLOOR_ID, enemy.getAgentId());
+        assertEquals("patrol must resume after turning toward a valid route",
+                PatrolController.PatrolDecision.Kind.MOVE, resumed.kind());
+        assertTrue(state.hasTarget());
+    }
+
+    // ---------- 动态实体阻挡 ----------
 
     @Test
     public void twoConsecutiveBlocksAbandonTargetIntoScan() {
@@ -255,7 +298,7 @@ public class PatrolControllerTest {
                 == PatrolController.PatrolDecision.Kind.WAIT);
     }
 
-    // ---------- P25-PATROL-05 扫描中玩家可见被 reflex 中断 ----------
+    // ---------- 扫描中玩家可见被 reflex 中断 ----------
 
     @Test
     public void visiblePlayerInterruptsScanningPatrol() {
@@ -281,7 +324,7 @@ public class PatrolControllerTest {
                 "MoveAction", outcome.getActionType());
     }
 
-    // ---------- P25-PATROL-08 本地 lease 复用不崩溃 ----------
+    // ---------- 本地 lease 复用不崩溃 ----------
 
     @Test
     public void localPatrolLeaseReuseNeverCrashesPlanner() {
@@ -304,7 +347,7 @@ public class PatrolControllerTest {
         assertTrue("patrol must actually progress, not freeze", progressed);
     }
 
-    // ---------- P25-PATROL-06 玩家仍隐藏：状态不含隐藏位置 ----------
+    // ---------- 玩家仍隐藏：状态不含隐藏位置 ----------
 
     @Test
     public void hiddenPlayerNeverEntersPatrolStateOrCandidates() {
@@ -334,7 +377,7 @@ public class PatrolControllerTest {
                 f.obs().canSeePlayer());
     }
 
-    // ---------- P25-PATROL-07 保存/读档恢复 ----------
+    // ---------- 保存/读档恢复 ----------
 
     @Test
     public void saveRestoreKeepsPatrolStateFields() {

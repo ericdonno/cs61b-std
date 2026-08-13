@@ -1,4 +1,5 @@
 # 放行苹果图片资源与阶段交付文档：父级 .gitignore 的 * 默认忽略所有文件，
-# 但本阶段要求 assets/tiles/apple.png 与 PHASE_2DOT5_COMPLETION.md 入库。
+# 但本阶段要求这些资源、Completion 与易读版指南入库。
 !assets/tiles/apple.png
 !PHASE_2DOT5_COMPLETION.md
+!phase3.md

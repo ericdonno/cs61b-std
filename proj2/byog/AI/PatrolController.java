@@ -172,7 +172,8 @@ public final class PatrolController {
                                         String agentId) {
         List<Position> candidates = collectCandidates(obs, self);
         if (candidates.isEmpty()) {
-            return PatrolDecision.wait("NO_PATROL_CANDIDATES");
+            // Re-check after one turn so a wall-facing scan cannot wait forever.
+            return PatrolDecision.turn(null, "NO_PATROL_CANDIDATES");
         }
         state.setMode(PatrolState.Mode.TRAVELING);
         long ordinal = state.getSelectionOrdinal();

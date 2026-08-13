@@ -135,10 +135,12 @@ commit barrier、deterministic fake runtime 与 Completion。
 - 原全向菱形的一半作为默认 directional FOV，并保留墙壁遮挡与可保存的 omnidirectional A/B baseline。
 - 只读私有 Observation 的确定性巡视：持续目标、到达停留、顺时针扫描、动态占位局部恢复和 reflex 中断。
 - 底部悬停信息条、敌人方向标记、单敌人/全局 FOV 显示和苹果图片/fallback。
+- 不依赖操作系统键盘重复率的玩家连续移动：按下立即响应、长按按游戏内固定节奏重复、松开不积压移动。
 - `agent-session.v1`、`private-observation.v2`、`agent-runtime.trace.v2`、跨语言 fixtures、固定场景和 no-cheat 回归。
 
 **完成标准**：玩家 HP、苹果、命名世界和当前楼层敌人状态可正确保存/恢复；相同输入产生相同苹果、
 初始朝向和巡视行为；背后或墙后的玩家不进入敌人 Observation；玩家可以从朝向标记和 FOV 显示理解规则；
+玩家连续移动不因系统键盘重复设置出现首步停顿、突发连走或松键后续走；
 全向 baseline 与 Phase 2 的 Session、deadline、cancel、fallback、feedback 和非阻塞测试全部通过；
 `PHASE_2DOT5_COMPLETION.md` 留下可复查证据。
 
@@ -266,7 +268,7 @@ commit barrier、deterministic fake runtime 与 Completion。
 Phase 0、Phase 1 和 Phase 2 已留下 Completion 与对应 artifacts；Phase 1.5 是可视化增强，不是 Agent 主线 gate。
 Phase 2 与 Phase 2.5 的最终 commit 均尚未回填，但当前工作树已有 Completion 记录的完整验收证据。
 
-Phase 2.5 自动验收已完成：`PHASE_2DOT5_COMPLETION.md` 记录了 165 个确定性测试、
-真实进程集成、共享 fixtures 与领域命名迁移证据。剩余的人工 UI 视觉验收与最终 commit
+Phase 2.5 自动验收已完成：`PHASE_2DOT5_COMPLETION.md` 记录了 173 个确定性测试、
+真实进程集成、共享 fixtures、领域命名迁移与连续移动证据。原 UI 视觉已由用户确认；剩余的新操控手感复验与最终 commit
 回填由用户确认；在 `PHASE_2DOT5_COMPLETION.md` 的 Definition of Done 全部勾选前，
 不开始 Phase 3 的真实模型、LangGraph、Tool Calling、skill registry 或 checkpoint 实现。

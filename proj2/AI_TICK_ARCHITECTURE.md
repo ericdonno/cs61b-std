@@ -2,9 +2,9 @@
 
 > 状态：当前实现说明
 >
-> 更新时间：2026-08-02
+> 更新时间：2026-08-13
 >
-> 范围：交互式游戏入口、Game Loop、双速控制链，以及已接入生产 Game/Enemy 的 AgentSession
+> 范围：交互式游戏入口、玩家连续移动、Game Loop、双速控制链，以及已接入生产 Game/Enemy 的 AgentSession
 >
 > 不包含：`playWithInputString()` 的旧字符串输入接口、Tool Calling、多 Agent 协作和复杂计划系统
 
@@ -50,6 +50,7 @@
 | 能力 | 状态 | 当前行为 |
 |------|------|----------|
 | 交互式 Game Loop | **已实现** | `Main → Game.playWithKeyboard()` 持续处理输入、AI、绘制和生命周期 |
+| 玩家连续移动 | **已实现** | PLAYING 采样 WASD 当前状态；按下立即、持有每 60ms 最多一格、松开无积压 |
 | AI Tick 调度 | **已实现** | 所有 Enemy 按 `poll → execute → commit → collect → close dead` 执行 |
 | 每次冷却至多一个 Action | **已实现** | 不再在一次 Enemy 更新中连续尝试多个动作 |
 | 私有观察与提交后反馈 | **已实现** | execute 使用旧观察，collect 从已提交世界生成新观察和 outcome |
@@ -92,7 +93,7 @@ flowchart TD
     LOAD -->|成功| RUNID
     LOAD -->|失败| MENU
 
-    PLAYING --> FRAME["处理一帧：输入 → AI Tick → 绘制"]
+    PLAYING --> FRAME["处理一帧：typed 控制键 → held WASD → AI Tick → 绘制 → 单次提交"]
     FRAME -->|继续| PLAYING
     FRAME -->|Pause / 玩家死亡| PAUSED["PAUSED"]
     PAUSED -->|Resume| PLAYING
@@ -114,11 +115,14 @@ flowchart TD
 
 1. [`Main.main`](byog/Core/Main.java) 无参数时调用 `Game.playWithKeyboard()`。
 2. [`Game.playWithKeyboard`](byog/Core/Game.java) 持有状态机和渲染循环。
-3. 新游戏或读档成功后，`beginAgentRun()` 创建新的 `runId`、清零 `logicalTick`，并调用
+3. 菜单、世界名、种子和攻击仍消费 typed 字符；PLAYING 的 WASD 由 `PlayerMoveController`
+   根据当前按键状态和单调时间生成移动，因此不依赖操作系统键盘重复率。
+4. 一次新按下立即移动；持续按住每 60ms 最多移动一格，约 16.7 格/秒。慢帧不追赶错过次数，松键后没有积压移动。
+5. 新游戏或读档成功后，`beginAgentRun()` 创建新的 `runId`、清零 `logicalTick`，并调用
    `primeEnemyObservations()`。
-4. 暂停和菜单仍会绘制，但不会调用 `runPlayingTick()`，因此不会推进 `logicalTick`。
-5. 换层会关闭旧 Enemy runtime，重建实体并生成新楼层的初始观察。
-6. 游戏退出使用 `finally` 关闭所有 Enemy Session，避免连接和 IO worker 泄漏。
+6. 暂停和菜单仍会绘制，但不会调用 `runPlayingTick()`，因此不会推进 `logicalTick`。
+7. 换层会关闭旧 Enemy runtime，重建实体并生成新楼层的初始观察。
+8. 游戏每轮只在主循环末尾调用一次 `StdDraw.show()`；退出使用 `finally` 关闭所有 Enemy Session。
 
 ---
 
@@ -215,6 +219,7 @@ sequenceDiagram
     participant D as Arbiter / Brain / Planner
     participant V as PerceptionSystem
 
+    G->>G: sample held WASD，至多提交一次玩家移动
     G->>G: runPlayingTick()
     G->>G: player.updateCharge() / updateHitTimer()
     G->>G: ensureRunIdentity()
@@ -702,7 +707,7 @@ Python 慢、断线或未启动时：
 | 数据 | 用途 |
 |------|------|
 | `logicalTick` | 游戏因果顺序、Lease TTL、proposal 时效 |
-| monotonic time | 网络 soft/hard deadline |
+| monotonic time | 网络 soft/hard deadline；交互式玩家移动的 60ms cadence |
 | `runId + floorId + agentId` | 世界身份 |
 | `sessionEpoch + requestGeneration` | Session 和请求身份 |
 | `observationSeq + decisionId` | 观察与决策关联 |

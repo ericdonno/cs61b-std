@@ -2,26 +2,27 @@
 
 ## 1. 元数据
 
-- **完成日期**：2026-08-03（工作树完成；人工 UI 验收待用户确认后关闭最终 gate）
+- **完成日期**：2026-08-03；2026-08-13 增补玩家连续移动与巡视面墙脱困修正（新手感仍待用户复验）
 - **分支**：`ai-enemis`
-- **基线 HEAD**：`9e5e2e097b03eb453efeb3e923d5a629d6a44b15`（`Expand repository execution and architecture guidelines`）
-- **工作树**：88 个变更文件（42 tracked 修改 + 46 新增）未提交；本 Completion 的验证全部对应 HEAD + 当前工作树
+- **基线 HEAD**：`142452b4c32050536f282f6647f349ac4c492e31`（`phase2.5 done by deepseekv4flash/reasonix`）
+- **工作树**：本次验证对应该 HEAD 加玩家输入文档、生产代码与测试改动；用户已有的 `1.md` 修改和三个 `run*_out.txt` 不属于本次交付
 - **规范**：`PHASE_2DOT5_SPEC.md`
 - **构建指南**：`PHASE_2DOT5_BUILD_GUIDE.md`
 - **运行环境**：Windows / PowerShell，Java 19.0.2，Python 3.14.6
 
-> 按 Phase 2 的先例，最终 commit 未创建（用户未授权提交）。正式提交后需回填 commit。
+> 玩家输入修正尚未形成最终 commit（用户未授权提交）。正式提交后需回填 commit。
 
 ## 2. 验收摘要
 
 | 入口 | 测试数 | 结果 | 说明 |
 |------|--------|------|------|
-| Java 编译 | 全部 `byog/**/*.java` | PASS | 无错误；仅 unchecked 警告 |
-| `CoreGameplayRegressionSuite` | 165 | PASS | 18 个 leaf 类，单一 deterministic gate |
+| Java 编译 | 全部 `byog/**/*.java` | PASS | 2026-08-13 复验 15.101s；无错误，仅 unchecked 警告 |
+| `PatrolControllerTest` | 9 | PASS | 0.363s；含面墙无候选时转向后恢复巡视的回归 |
+| `CoreGameplayRegressionSuite` | 174 | PASS | 19 个 leaf 类；9.283s；单一 deterministic gate |
 | `SocketTransportTest` | 9 | PASS | 独立网络回归 |
 | `AgentRuntimeIntegrationTest` | 7 | PASS | 真实 Python 进程端到端 |
 | `MathTest` | 5 | PASS | 独立工具测试 |
-| Python unittest | 26 | PASS | 含 3 个共享 fixture runner |
+| Python unittest | 26 | PASS | 0.651s；含 3 个共享 fixture runner |
 
 资源检查：集成测试创建的 Python 子进程由持有句柄的 harness 有界关闭；TCP 监听数 0。
 
@@ -34,6 +35,10 @@ javac -encoding UTF-8 -cp "..\library-sp18\javalib\*" -d out $javaSources
 
 java "-Dfile.encoding=UTF-8" `
     -cp "out;..\library-sp18\javalib\*" `
+    org.junit.runner.JUnitCore byog.Test.PatrolControllerTest
+
+java "-Dfile.encoding=UTF-8" `
+    -cp "out;..\library-sp18\javalib\*" `
     org.junit.runner.JUnitCore byog.Test.CoreGameplayRegressionSuite
 
 java "-Dfile.encoding=UTF-8" `
@@ -43,6 +48,10 @@ java "-Dfile.encoding=UTF-8" `
 java "-Dfile.encoding=UTF-8" `
     -cp "out;..\library-sp18\javalib\*" `
     org.junit.runner.JUnitCore byog.Test.AgentRuntimeIntegrationTest
+
+java "-Dfile.encoding=UTF-8" `
+    -cp "out;..\library-sp18\javalib\*" `
+    org.junit.runner.JUnitCore byog.Test.MathTest
 
 cd agent/python
 python -B -m unittest discover -s tests
@@ -96,7 +105,11 @@ python -B -m unittest discover -s tests
 | P25-UI-01 | bottom offset 坐标互逆 | [x] | `screenMappingIsInverseAndKeepsWorldSize` |
 | P25-UI-02 | enemy hover model 来源正确 | [x] | `enemyHoverShowsHpBarAndFacing` |
 | P25-UI-03 | apple/terrain/no hover 文案 | [x] | `appleHoverShowsHealAndFullHpHint` 等 |
-| P25-UI-04 | 人工视觉（E、金色方向标、FOV、emoji/fallback） | 待人工 | 用户确认 |
+| P25-UI-04 | 人工视觉（E、金色方向标、FOV、emoji/fallback） | [x] | 用户于 2026-08-13 确认除玩家操控手感外无问题 |
+| P25-INPUT-01 | 新方向按下立即移动 | [x] | `PlayerInputCadenceTest.newDirectionMovesImmediately` |
+| P25-INPUT-02 | 长按固定 cadence、慢帧不追赶 | [x] | `heldDirectionRepeatsWithoutCatchingUp` |
+| P25-INPUT-03 | 松开停止、再按立即 | [x] | `releaseStopsAndPressAgainMovesImmediately` |
+| P25-INPUT-04 | 最近方向优先与释放恢复 | [x] | `newestHeldDirectionWinsAndReleaseRestoresPrevious` |
 
 ### 巡视、契约与回归
 
@@ -104,17 +117,18 @@ python -B -m unittest discover -s tests
 |---------|------|------|------|
 | P25-PATROL-01 | 目标持续且在私有候选内 | [x] | `targetStaysStableWhileTraveling` |
 | P25-PATROL-02 | 相同脚本 trace 稳定 | [x] | `sameScriptRepeatsSameTrace` |
-| P25-PATROL-03 | 到达 Wait→顺时针 Turn×3→重选 | [x] | `reachingTargetWaitsThenScansClockwise` |
+| P25-PATROL-03 | 到达 Wait→顺时针 Turn×2→重选（当前实现；与 Spec 的 3 次冲突） | [x] | `reachingTargetWaitsThenScansClockwise` |
 | P25-PATROL-04 | 两次受阻放弃进扫描 | [x] | `twoConsecutiveBlocksAbandonTargetIntoScan` |
 | P25-PATROL-05 | 扫描中玩家可见被 reflex 中断 | [x] | `visiblePlayerInterruptsScanningPatrol` |
 | P25-PATROL-06 | 隐藏玩家不入状态/候选 | [x] | `hiddenPlayerNeverEntersPatrolStateOrCandidates` |
 | P25-PATROL-07 | 保存/读档恢复 | [x] | `saveRestoreKeepsPatrolStateFields` + 存档 round-trip |
+| 补充巡视回归 | 扫描朝墙且无候选时继续逐向转身，不永久 Wait | [x] | `emptyCandidateViewTurnsUntilPatrolCanResume` |
 | P25-PROTOCOL-01 | valid v2 fixture 双端一致 | [x] | `AgentContractFixtureTest` + `test_contract_fixtures.py` |
 | P25-PROTOCOL-02 | old/unknown version 双端拒绝 | [x] | 6 个 invalid fixture 稳定 code |
 | P25-PROTOCOL-03 | invalid facing/mode/worldId 拒绝 | [x] | 同上 |
 | P25-TRACE-01 | v2 trace 含新字段、canonical 稳定 | [x] | `AgentTraceContractTest` + `sameScriptRepeatsSameTrace` |
 | P25-TRACE-02 | 领域 schema 命名迁移 | [x] | 命名扫描 + `legacy-decision/private-perception/agent-runtime` 版本 |
-| P25-REGRESSION-01 | Phase 2 leaf tests 迁移后全过 | [x] | `CoreGameplayRegressionSuite` 165 tests |
+| P25-REGRESSION-01 | Phase 2 leaf tests 迁移后全过 | [x] | `CoreGameplayRegressionSuite` 174 tests |
 | P25-REGRESSION-02 | 真实 Python 模式有界通过 | [x] | `AgentRuntimeIntegrationTest` 7 tests |
 | P25-REGRESSION-03 | 源码命名扫描 | [x] | byog/config/agent/python 清零 |
 
@@ -155,9 +169,16 @@ Python runner `test_contract_fixtures.py` 同次验证）：
    （Spec Out of Scope 一致）。
 4. **巡视 trace 事件由 Enemy 执行层记录**（`PATROL_STATE_CHANGED` / `PATROL_TARGET_SELECTED`），
    PatrolController 本身不依赖 trace，保持纯决策。
-5. **UI 人工验收（P25-UI-04）待用户确认**：E 字符、金色方向标、单/全 FOV、
-   emoji 图片/fallback 的可辨识性未做截图记录。
-6. **最终 commit 未创建**：所有测试结果对应 HEAD + 工作树；提交后需回填。
+5. **巡视面墙冻结已修复**：2026-08-13 玩家现场日志显示 `Enemy#5` 在巡视期间长时间无规划输出，
+   贴近后由 `P1_ADJACENT_THREAT` 恢复追击。根因是 `SCANNING` 朝墙时无 3–8 格候选，原实现返回
+   `WaitAction` 且不改变扫描状态。现在返回一次顺时针 `TurnAction`，下一 action opportunity 按新朝向重新选目标。
+   生产 Game 仍使用 `AgentTrace.NO_OP`，因此普通控制台日志不含 `NO_PATROL_CANDIDATES` 和 ActionResult；本次以定向回归测试固定该路径。
+6. **扫描次数文档冲突待裁决**：批准的 Spec/Build Guide 要求到达后顺时针 Turn 三次；当前生产常量、注释和
+   `reachingTargetWaitsThenScansClockwise` 实际固定为两次。本次不改变已有玩法节奏，只记录差异；后续需决定是恢复三次，
+   还是修订批准文档为两次。
+7. **连续移动新手感待用户复验**：按键状态、60ms cadence（约 16.7 格/秒）、松键无积压和单次画面提交已有自动化/源码证据，
+   但本轮没有替用户操作 GUI，最终主观手感仍需人工试玩确认。
+8. **最终 commit 未创建**：本次修正的测试结果对应 `142452b` + 当前工作树；提交后需回填。
 
 ## 8. Definition of Done 对照
 
@@ -168,16 +189,18 @@ Python runner `test_contract_fixtures.py` 同次验证）：
 - [x] Enemy maxHp、Facing、Turn/Wait 与成功/失败动作朝向规则实现并保存。
 - [x] directional 半菱形、LOS、边缘、墙角、全向 baseline 测试通过。
 - [x] 可保存巡视状态机、两次受阻恢复、reflex interrupt 测试通过。
-- [x] 底部悬停条、朝向标记、FOV 显示与 apple 图片/fallback：逻辑完成，人工验收待确认。
+- [x] 巡视面墙无候选时会逐向转身并重新选目标，不会永久 Wait。
+- [x] 底部悬停条、朝向标记、FOV 显示与 apple 图片/fallback 已由用户确认可读。
+- [x] 玩家移动按下立即、长按 60ms cadence（约 16.7 格/秒）、松开无积压与最近方向优先的自动化测试通过；人工手感待复验。
 - [x] `agent-session.v1`、`private-observation.v2`、`agent-runtime.trace.v2` 双语言 gate 通过。
 - [x] 触及源码/测试/配置/runtime 字符串使用领域命名，无开发阶段编号。
 - [x] deterministic Suite 只列 leaf tests，无嵌套或重复执行。
 - [x] 默认 deterministic gate 无 GUI、真实网络、默认存档和 sleep。
 - [x] Phase 2 Session/deadline/cancel/fallback/feedback/真实进程故障回归通过。
 - [x] Roadmap、healthpack、Phase 3 两份草案已同步（见 §9）。
-- [ ] 验证命令、测试数、人工证据、偏差与最终 commit 写入本 Completion —— 人工证据与
+- [ ] 验证命令、测试数、人工证据、偏差与最终 commit 写入本 Completion —— 连续移动人工复验与
       commit 回填待用户确认后补记。
-- [ ] Phase 3 只在以上条件全部满足后开始 —— 等待人工 UI 确认与 commit 授权。
+- [ ] Phase 3 只在以上条件全部满足后开始 —— 等待连续移动人工复验与 commit 授权。
 
 ## 9. 文档同步
 

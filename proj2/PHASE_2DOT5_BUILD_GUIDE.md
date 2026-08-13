@@ -135,7 +135,7 @@ Phase 2.5 最容易出错的地方不是单个字段，而是把状态放进了�
 | 2.5.4 | Step 2.5.4 | Enemy `maxHp`、Facing、Turn/Wait |
 | 2.5.5 | Step 2.5.5 | 半菱形 FOV 与 Observation v2 |
 | 2.5.6 | Step 2.5.6 | 可保存的确定性巡视状态机 |
-| 2.5.7 | Step 2.5.7 | 底部上下文 UI 与 FOV 解释 |
+| 2.5.7 | Step 2.5.7 | 可理解界面与稳定玩家输入 |
 | 2.5.8 | Step 2.5.8 | 领域 trace、测试命名和完整 gate |
 | 2.5.9 | Step 2.5.9 | Completion 与 Phase 3 开工证明 |
 
@@ -150,7 +150,7 @@ Phase 2.5 最容易出错的地方不是单个字段，而是把状态放进了�
 2.5.3 ────────────────> 2.5.4 Enemy maxHp / Facing / Action
 2.5.4 ────────────────> 2.5.5 半菱形 FOV / Observation v2 / wire
 2.5.5 ────────────────> 2.5.6 确定性巡视
-2.5.2 + 2.5.4 + 2.5.5 ─> 2.5.7 底部 UI / debug / 图片
+2.5.2 + 2.5.4 + 2.5.5 ─> 2.5.7 UI / debug / 图片 / 玩家输入
 2.5.3 + 2.5.5 + 2.5.6 ─> 2.5.8 trace / fixtures / 全量 gate
 2.5.8 + 人工证据 ───────> 2.5.9 Completion
 ```
@@ -562,9 +562,10 @@ ActionOutcome 为 BLOCKED 时通知 PatrolController。第一次受阻保留 tar
 - 测试明确证明 controller API 无完整 world/Player 参数。
 - Phase 2 stale patrol 不覆盖 reflex engage 的回归仍通过。
 
-## 2.5.7 加入底部上下文 UI 与可理解视野
+## 2.5.7 加入可理解界面与稳定玩家输入
 
-UI 最后读取已经稳定的 Enemy、苹果和 FOV 状态。这样显示层只解释事实，不会反过来定义第二套玩法规则。
+UI 最后读取已经稳定的 Enemy、苹果和 FOV 状态。玩家连续移动也在这里修正，因为人工试玩已证明
+`nextKeyTyped()` 把手感交给了操作系统键盘重复设置。两项改动都只处理玩家交互，不改变世界权威或 AI tick。
 
 ### 2.5.7.1 先统一屏幕坐标
 
@@ -605,12 +606,31 @@ Enemy 使用 Enemy.maxHp 画血条，不从 `GameConfig.enemyHp` 猜。无有效
 普通模式悬停一个 Enemy 时只高亮它的 `cachedVisibleMask`；debug flag 开启时高亮全部活敌人。不要在 hover
 时重新运行 PerceptionSystem，否则鼠标 UI 可能看到一个与 action tick 不同的世界瞬间。
 
+### 2.5.7.5 用按键状态驱动连续移动
+
+菜单、世界名和种子仍消费字符队列。PLAYING 中的 WASD 不再直接执行 `key typed` 事件；每个交互帧使用
+`StdDraw.isKeyPressed()` 读取四个方向的当前状态，再交给一个不依赖 StdDraw 的小型状态对象决定是否移动：
+
+1. 新方向按下时立即返回一次移动。
+2. 持续按住同一方向时，每 60ms 最多返回一次。
+3. 多方向同时按住时，最近按下方向优先；释放后恢复仍按住的最近方向。
+4. 帧变慢时不补执行错过的重复，避免松键后继续移动。
+
+状态对象只返回 `Direction`；实际移动继续调用 `Game.movePlayer()`，不要复制碰撞、苹果或楼梯逻辑。
+PLAYING 的字符队列要排空并忽略 WASD typed 事件，避免系统重复事件积压或与状态采样重复移动。
+
+所有 draw 方法只写入双缓冲。保留主循环末尾唯一的 `StdDraw.show()`，删除游戏画面内部的重复提交。
+本次不重写固定时间步、不修改 Enemy cooldown 或玩家攻击蓄力；若输入修正后仍测得明显帧抖动，再单独审计
+逻辑 tick 与渲染解耦，不能顺手改坏 Phase 2 的 commit barrier。
+
 ### 2.5.7 阶段闸门
 
-- `P25-UI-01–04` 通过。
+- `P25-UI-01–04` 与 `P25-INPUT-01–04` 通过。
 - 顶部 HUD、世界、底部 UI 不重叠。
 - 地图边缘 mouse mapping 不越界。
 - 图片失败时 apple 红点仍可识别。
+- 按下立即移动；长按 cadence 稳定；松键不再继续；不同系统键盘重复设置不改变行为。
+- 一轮交互循环只调用一次 `StdDraw.show()`。
 
 ## 2.5.8 迁移 trace、测试命名并运行完整 gate
 
@@ -673,9 +693,10 @@ Phase2TestSuite         → CoreGameplayRegressionSuite
 2. 受伤、满血经过 apple、缺血拾取 apple、下楼和读档。
 3. 从敌人背后接近，确认未被发现；走到侧面中线和正面确认规则。
 4. 悬停敌人检查底栏、血条、Facing、方向标记和单敌人 FOV。
-5. 开启全局 FOV，比较 directional/omnidirectional 固定场景。
-6. 观察敌人前往同一目标、等待、三次扫描、被另一个敌人阻挡和被玩家打断。
-7. 从非项目根启动一次，检查 apple 图片或 fallback。
+5. 分别轻点、长按、松开和切换 WASD，确认首步立即、重复均匀、松开即停。
+6. 开启全局 FOV，比较 directional/omnidirectional 固定场景。
+7. 观察敌人前往同一目标、等待、三次扫描、被另一个敌人阻挡和被玩家打断。
+8. 从非项目根启动一次，检查 apple 图片或 fallback。
 
 ### 2.5.9.2 编写 Completion
 
@@ -703,7 +724,7 @@ Phase2TestSuite         → CoreGameplayRegressionSuite
 
 | 顺序 | 入口 | 重点 |
 |------|------|------|
-| 1 | `byog/Core/Game.java` | 新建/读取世界、换层、tick、拾取与 UI composition |
+| 1 | `byog/Core/Game.java`、`PlayerMoveController.java` | 新建/读取世界、输入 cadence、换层、tick、拾取与 UI composition |
 | 2 | `byog/Entity/PlayerRunState.java`、`Player.java` | 整局 HP 与当前楼层状态边界 |
 | 3 | `byog/IO/WorldSaveRepository.java`、`GameSaveData.java` | 命名世界、原子保存和类型化快照 |
 | 4 | `byog/WorldGen/HealthPackGenerator.java` | 苹果候选、独立随机流和放置 |
@@ -764,6 +785,8 @@ rg -n "Phase[0-9]|Step[0-9]|阶段[[:space:]]*[0-9]|步骤[[:space:]]*[0-9]" `
 | 覆盖失败后旧档丢失 | 是否先删 target、temp 是否同目录 | 增加旧格式 fallback |
 | 背后玩家仍触发 reflex | visibleEntities 是否在 mask 完成前收集 | 在 ReflexController 再过滤一次 |
 | UI FOV 与 AI 不同 | UI 是否重新计算而非读 cached mask | 微调 UI 近似公式 |
+| 长按先停顿再突发移动 | PLAYING 是否仍调用 typed WASD、是否只读一个队列字符 | 调系统键盘重复率 |
+| 松键后继续移动 | 输入控制器是否追赶错过 cadence、typed 队列是否未排空 | 清空或延长全局 ActionQueue |
 | 敌人每次 save/load 改目标 | PatrolState/ordinal 是否完整保存 | 保存 Java Random 对象 |
 | 敌人卡住随机抖动 | planner 空路径 fallback 是否仍存在 | 增加更多 random retry |
 | Python 拒绝所有 observation | envelope/Observation constants 与 exact fields | 临时忽略 unknown field |
@@ -793,6 +816,7 @@ rg -n "Phase[0-9]|Step[0-9]|阶段[[:space:]]*[0-9]|步骤[[:space:]]*[0-9]" `
 - [ ] shared fixtures、domain trace 和新 Suite 命名完成。
 - [ ] bottom hover、HP bar、Facing marker、单/全 FOV 可读。
 - [ ] apple emoji 风格图片稳定，或明确使用红点 fallback。
+- [ ] 玩家移动按下立即、长按固定 cadence、松开无积压；画面每轮只提交一次。
 
 ### Gate 与交接
 

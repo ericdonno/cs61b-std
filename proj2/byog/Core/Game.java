@@ -48,6 +48,7 @@ import edu.princeton.cs.introcs.StdDraw;
 
 import java.awt.Color;
 import java.awt.Font;
+import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -65,6 +66,8 @@ public class Game {
     private Player player;
     private EntityManager entityMgr;
     private Map<Character, Runnable> keyBindings;
+    private final PlayerMoveController playerMoveController =
+            new PlayerMoveController();
     private String seed;
 
     private long frameCounter = 0;
@@ -154,6 +157,7 @@ public class Game {
         entityMgr = new EntityManager();
         player = null;
         initKeyBindings();
+        playerMoveController.reset();
 
         // 状态机
         GameState currentState = GameState.MENU;
@@ -165,11 +169,12 @@ public class Game {
                 frameCounter++;
 
                 // 处理键盘输入（世界名输入保留原始大小写，其余状态转小写）
-                if (StdDraw.hasNextKeyTyped()) {
+                while (StdDraw.hasNextKeyTyped()) {
                     char raw = StdDraw.nextKeyTyped();
                     char c = currentState == GameState.WORLD_NAME_INPUT
                             ? raw : Character.toLowerCase(raw);
-                    currentState = processInput(currentState, c, seedStr);
+                    currentState = processTypedKeyboardInput(
+                            currentState, c, seedStr);
                 }
 
                 // 处理鼠标点击暂停按钮（边沿检测）
@@ -188,6 +193,7 @@ public class Game {
                 mouseWasPressed = mousePressed;
 
                 if (currentState == GameState.PLAYING) {
+                    handleHeldPlayerMovement();
                     runPlayingTick();
 
                     // 检测玩家死亡
@@ -411,6 +417,24 @@ public class Game {
         }
     }
 
+    /** Keeps typed WASD events out of interactive movement without changing the legacy string path. */
+    private GameState processTypedKeyboardInput(
+            GameState state, char c, StringBuilder seedStr) {
+        if (isMovementKey(c)) {
+            if (state == GameState.PLAYING) {
+                return state;
+            }
+            if (state == GameState.QUIT_PENDING) {
+                return GameState.PLAYING;
+            }
+        }
+        return processInput(state, c, seedStr);
+    }
+
+    private static boolean isMovementKey(char c) {
+        return c == 'w' || c == 'a' || c == 's' || c == 'd';
+    }
+
     /**
      * 根据状态绘制画面
      */
@@ -549,7 +573,6 @@ public class Game {
         drawFacingMarkers();
         drawBottomHoverBar();
         drawUIBar(isPaused);
-        StdDraw.show();
     }
 
     /** 在所有 tile 绘制后，为每个活敌人画金色朝向标记（不占用相邻 tile）。 */
@@ -772,6 +795,18 @@ public class Game {
             action.run();
         } else {
             Logger.info("Unbind Key \"%c\"", c);
+        }
+    }
+
+    private void handleHeldPlayerMovement() {
+        Direction direction = playerMoveController.nextMove(
+                StdDraw.isKeyPressed(KeyEvent.VK_W),
+                StdDraw.isKeyPressed(KeyEvent.VK_S),
+                StdDraw.isKeyPressed(KeyEvent.VK_A),
+                StdDraw.isKeyPressed(KeyEvent.VK_D),
+                System.nanoTime());
+        if (direction != null && player != null && player.isAlive()) {
+            movePlayer(player, direction);
         }
     }
 

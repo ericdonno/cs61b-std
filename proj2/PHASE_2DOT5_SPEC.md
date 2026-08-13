@@ -6,8 +6,8 @@
 - **状态**：Approved
 - **创建日期**：2026-08-02
 - **基线分支**：`ai-enemis`
-- **基线 HEAD**：`bbd5dae99a9827a87017b751b196c42c3ece436d`
-- **工作树说明**：Phase 2 实现与 Completion 尚未形成最终 commit；本 Spec 以该 HEAD 加当前未提交工作树为事实基线
+- **基线 HEAD**：`142452b4c32050536f282f6647f349ac4c492e31`
+- **工作树说明**：Phase 2.5 实现已进入该 commit；2026-08-13 审计时另有用户的 `1.md` 修改与三个运行输出文件，均不属于本次操控修正
 - **前一阶段 Completion**：[PHASE_2_COMPLETION.md](PHASE_2_COMPLETION.md)
 - **配套指南**：[PHASE_2DOT5_BUILD_GUIDE.md](PHASE_2DOT5_BUILD_GUIDE.md)
 - **后续阶段**：[PHASE_3_SPEC.md](PHASE_3_SPEC.md)
@@ -48,6 +48,8 @@
 | planner 路径失败时随机走一步 | `byog/AI/ClassicalPlanner.java:68-75` | 会产生不可解释抖动；巡视路径必须改成确定性局部恢复 |
 | 已有全局敌人 FOV debug overlay | `byog/Core/Game.java:548-564` | 可扩为单敌人悬停视野和全局基线模式，不另建渲染器 |
 | `TETile` 支持 16×16 图片与字符 fallback | `byog/TileEngine/TETile.java:14-18, 75-99` | 苹果可以先试 emoji 风格图片，不必把全部 tile 改成字符串 |
+| PLAYING 每帧只消费一个 `nextKeyTyped()` 字符 | `byog/Core/Game.java:167-173` | 长按节奏受操作系统首轮延迟和重复率控制，输入积压时会在松键后继续移动 |
+| 游戏画面在内层 draw 和主循环各调用一次 `StdDraw.show()` | `byog/Core/Game.java:200-204, 540-552` | 同一帧重复提交增加无意义的渲染开销和输入到画面的延迟 |
 
 ### 1.3 已审计的测试与入口
 
@@ -78,6 +80,7 @@ Observation，苹果不会泄露为战术资源。Phase 3 以新的身份、Obse
 - 保存/读档恢复整局状态与当前楼层快照，但不恢复 Socket、Lease 或 ActionQueue；
 - 半边视野不会从隐藏地图或背后玩家泄露信息；
 - 新 UI 能解释敌人 HP、朝向和苹果效果；
+- 玩家按下移动键立即走一格，长按按游戏内固定节奏重复，松键后不执行积压移动；
 - 全向基线仍可通过保存的配置模式运行和对比；
 - Java/Python contract、trace 与固定场景使用同一领域版本；
 - Phase 2 的非阻塞、单 Action cadence、commit barrier 和 fallback 回归不退化。
@@ -132,7 +135,7 @@ Observation，苹果不会泄露为战术资源。Phase 3 以新的身份、Obse
 | INV-06 严格契约 | `agent-session.v1`、`private-observation.v2`、共享 fixtures | Java/Python 正反 fixture 测试 |
 | INV-07 异步时效 | 保留新 run、floor 和 generation 过期规则 | 读档/换层迟到 intent 回归 |
 | INV-08 可追踪评估 | `agent-runtime.trace.v2` 记录朝向、视野模式和巡视转换 | canonical trace 测试 |
-| INV-09 玩法价值 | 朝向标记、底部悬停条、单敌人 FOV 与全向 A/B | 人工试玩清单与截图 |
+| INV-09 玩法价值 | 朝向标记、底部悬停条、单敌人 FOV、全向 A/B 与可预测连续移动 | 人工试玩清单、截图与输入节奏测试 |
 
 ## 5. 范围与非目标
 
@@ -147,6 +150,7 @@ Observation，苹果不会泄露为战术资源。Phase 3 以新的身份、Obse
 - 原菱形 FOV 的朝向半边过滤、全向 baseline 模式和 LOS 保留。
 - 可保存、可中断、使用私有 Observation 的确定性巡视状态机。
 - 底部悬停 UI、敌人朝向标记、单敌人/全局 FOV 调试和苹果图片试验。
+- PLAYING 状态的按键状态采样、游戏内连续移动节奏与单次画面提交。
 - Observation、envelope、Python codec、fixtures、save snapshot、trace 与相关测试迁移。
 - Roadmap、healthpack 和 Phase 3 两份草案同步。
 
@@ -278,6 +282,15 @@ Phase 3 的 thread key 改为 `worldId/floorId/agentId`；`runId`、session epoc
 仍属于运行/请求身份。同一命名世界同一楼层读档可以恢复该敌人的 checkpoint；新楼层、新世界或
 checkpoint 缺失时冷启动。Python checkpoint 仍不是 Java save 的组成部分，缺失不得破坏世界加载。
 
+### D25-14：连续移动节奏由游戏控制
+
+菜单、世界名和种子继续消费 `key typed` 字符；PLAYING 中的 WASD 改为读取当前按键状态。一次新按下必须
+立即移动，持续按住后每 60ms 最多再移动一格，松开后不得补执行错过的重复。多个方向同时按住时使用
+最近按下且仍保持的方向；该方向松开后回到仍按住的最近方向。
+
+输入节奏使用单调时间，只决定何时提出一次玩家移动，不推进 `logicalTick`，也不改变 AI 的 poll/execute/
+commit/collect 顺序。渲染循环每轮只提交一次画面。本修正不改攻击蓄力、Enemy cooldown、存档或 wire 契约。
+
 ## 7. 目标架构与数据流
 
 ### 7.1 新世界创建
@@ -361,6 +374,20 @@ poll remote messages
 
 玩家成功移动并提交新坐标后检查底层 tile。若为 apple 且 `hp < configuredMaxHp`，按配置治疗、clamp、
 更新 `PlayerRunState.currentHp` 并把 tile 恢复为 floor。满血时不修改 tile。敌人移动永远不触发该流程。
+
+### 7.6 玩家连续移动
+
+```text
+每个交互帧读取 WASD 当前按下状态
+  → 新方向按下：立即提出一次移动
+  → 同一方向持续按住且到达 60ms cadence：提出一次移动
+  → 未到 cadence：本帧不移动
+  → 松开全部方向：清除重复期限，不产生积压移动
+  → 完成输入、AI tick 和绘制后：只调用一次 StdDraw.show()
+```
+
+玩家移动仍调用现有 `Player.move()`、`EntityManager.canMoveTo()` 和 `Game.movePlayer()`，碰撞、苹果拾取和
+楼梯逻辑不复制到输入控制器。
 
 ## 8. 接口与数据契约
 
@@ -548,7 +575,8 @@ decisionId, decisionSource, overrideReason
 | `byog/IO/FileWorldSaveRepository.java` | 新建 | 文件实现 | root confinement、temp + replace | 自动删除坏档 |
 | `byog/IO/WorldSaveEntry.java` | 新建 | 列表结果 | readable summary 或 failure path | live Game 对象 |
 | `byog/IO/SaveLoadManager.java` | 删除或薄适配 | 历史入口迁移 | 委托 repository，不再默认单文件 | 新 runtime work |
-| `byog/Core/Game.java` | 修改 | 流程编排 | 命名菜单、生成顺序、换层、拾取、UI offset | protocol parser |
+| `byog/Core/Game.java` | 修改 | 流程编排 | 命名菜单、生成顺序、换层、拾取、输入采样、UI offset、单次画面提交 | protocol parser |
+| `byog/Core/PlayerMoveController.java` | 新建 | 连续移动节奏 | 按键边沿、最近方向、60ms 重复、无积压 | StdDraw、碰撞、世界状态 |
 | `byog/Perception/ObservationEnvelope.java` | 修改 | immutable v2 observation | facing/maxHp/mode/worldId | live world 泄漏 |
 | `byog/Perception/PerceptionSystem.java` | 修改 | 半边 FOV | mode filter + existing LOS | 地图记忆 |
 | `byog/Perception/VisibleTile.java` | 修改 | 防御映射 | APPLE → FLOOR | APPLE wire enum |
@@ -618,13 +646,15 @@ deterministic checkpoint 时不得开始下一 Step；协议 Step 必须 Java/Py
 - **验证**：`P25-PATROL-01–06`。
 - **artifact**：同输入可重复、读档可恢复的当前楼层巡视状态机。
 
-### Step 2.5.7：加入底部上下文 UI 与视野解释
+### Step 2.5.7：加入可理解界面与稳定玩家输入
 
-- **输入**：Enemy `hp/maxHp`、Facing、苹果状态和 committed FOV mask。
-- **改动**：增加两行底栏、有效 hover 信息、血条、金色方向标、单敌人/全局 FOV 和苹果图片验证。
-- **保持不变**：世界逻辑尺寸仍为 80×30；无有效 hover 时底栏为空；UI 不重算 FOV。
-- **验证**：`P25-UI-01–04` 与人工视觉检查。
-- **artifact**：玩家可理解且不制造第二套事实的感知 UI。
+- **输入**：Enemy `hp/maxHp`、Facing、苹果状态、committed FOV mask 与当前 PLAYING 输入路径。
+- **改动**：增加两行底栏、有效 hover 信息、血条、金色方向标、单敌人/全局 FOV、苹果图片验证，
+  并把 WASD 连续移动从系统 key repeat 改为按键状态加游戏内 60ms cadence。
+- **保持不变**：世界逻辑尺寸仍为 80×30；无有效 hover 时底栏为空；UI 不重算 FOV；玩家移动继续走
+  现有碰撞、拾取和楼梯入口；AI tick 与攻击蓄力语义不变。
+- **验证**：`P25-UI-01–04`、`P25-INPUT-01–04` 与人工视觉/操控检查。
+- **artifact**：玩家可理解且不制造第二套事实的感知 UI，以及不依赖操作系统重复率的连续移动。
 
 ### Step 2.5.8：迁移 trace、测试命名并运行完整 gate
 
@@ -684,7 +714,7 @@ deterministic checkpoint 时不得开始下一 Step；协议 Step 必须 Java/Py
 | P25-SAVE-08 | 保存时间 | fake clock 决定摘要；墙钟值不影响 canonical gameplay |
 | P25-SAVE-09 | 新 ID 覆盖清理失败 | 新档已落盘、旧档保留但被明确 supersede；列表只显示新世界并记录警告 |
 
-### 11.3 朝向、FOV 与 UI
+### 11.3 朝向、FOV、UI 与玩家输入
 
 | Test ID | 场景 | 断言 |
 |---------|------|------|
@@ -702,6 +732,10 @@ deterministic checkpoint 时不得开始下一 Step；协议 Step 必须 Java/Py
 | P25-UI-02 | enemy hover model | current/max HP、血条和 Facing 来源正确 |
 | P25-UI-03 | apple/terrain/no hover | 文案正确；无有效目标时底栏为空 |
 | P25-UI-04 | 人工视觉 | E、金色方向标、单/全 FOV、emoji 图片/fallback 可辨识 |
+| P25-INPUT-01 | 新方向按下 | 不等待系统 key repeat，第一次采样立即返回该方向 |
+| P25-INPUT-02 | 持续按住 | 60ms 前不重复；到期只返回一次，不追赶渲染期间错过的次数 |
+| P25-INPUT-03 | 松开与再按 | 松开后不移动；再次按下立即移动，不消费旧积压 |
+| P25-INPUT-04 | 多方向 | 最近按下方向优先；释放后恢复仍按住的最近方向 |
 
 ### 11.4 巡视、契约与回归
 
@@ -733,6 +767,7 @@ Completion 至少保存：
 - 朝向变化与 Action result、巡视状态、reflex override 的可关联 trace；
 - Java/Python 对共享 fixture 的通过数和拒绝原因；
 - 底部 UI、方向标记、单敌人 FOV、全局 FOV 和苹果图片的人工截图或检查记录；
+- 玩家移动按下立即响应、长按稳定重复、松开即停的自动化与人工检查记录；
 - Phase 2 完整非阻塞回归的命令、测试数和结果。
 
 所有运行期控制台输出必须通过 `Logger`。存档时间和文件路径属于 diagnostics，不进入 deterministic trace。
@@ -772,6 +807,8 @@ Completion 至少保存：
 | 保存 `Random` 实现对象 | Java 变化导致序列不稳 | 保存 ordinal，以 seed/identity/ordinal 派生选择 |
 | Turn/Wait 引入多 Action 同 tick | 破坏 Phase 2 cadence | 生产 AiTickLoop 仍每 cooldown 最多执行一个 Action |
 | hover FOV 与真实 FOV 两套算法 | 玩家 UI 撒谎 | UI 只读取 Enemy cached committed mask |
+| WASD 继续依赖系统 key repeat | 首步停顿、突发连走、不同机器手感不一致 | PLAYING 采样按键状态；游戏内单调时间控制重复，不追赶遗漏次数 |
+| 同一交互帧重复 `show()` | 增加渲染开销和输入显示延迟 | 所有 draw 只写双缓冲，主循环统一提交一次 |
 | 协议单边升级 | runtime 全部断开 | Java/Python/fixture 同一增量、同一 gate |
 | checkpoint 使用 runId | 读档无法续接同楼记忆 | Phase 3 改用 world/floor/agent，runId 继续做请求安全 |
 
@@ -798,6 +835,7 @@ Completion 至少保存：
 - [ ] directional 半菱形、LOS、地图边缘、墙角和全向 baseline 测试通过。
 - [ ] 可保存巡视状态机、两次受阻恢复和 reflex interrupt 测试通过。
 - [ ] 底部悬停条、朝向标记、FOV 显示和苹果图片/fallback 完成人工验收。
+- [ ] 玩家移动按下立即响应、长按按固定 cadence 重复、松开无积压，且不同系统 key repeat 设置不改变语义。
 - [ ] `agent-session.v1`、`private-observation.v2` 和 `agent-runtime.trace.v2` 双语言 gate 通过。
 - [ ] 触及的源码、测试、配置和 runtime 字符串使用领域命名，不含开发阶段编号。
 - [ ] deterministic Suite 只列 leaf tests，无嵌套或重复执行。

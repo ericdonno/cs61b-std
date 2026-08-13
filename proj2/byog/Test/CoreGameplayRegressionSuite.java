@@ -30,6 +30,7 @@ import org.junit.runners.Suite;
     DirectionalFovTest.class,
     PatrolControllerTest.class,
     BottomBarUiTest.class,
+    PlayerInputCadenceTest.class,
     AgentContractFixtureTest.class
 })
 public final class CoreGameplayRegressionSuite {
