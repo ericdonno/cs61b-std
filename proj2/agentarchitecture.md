@@ -2,7 +2,7 @@
 
 > 状态：外部 Agent 目录边界、确定性/runtime graph 双路径与 Java 权威技能接线说明
 >
-> 更新时间：2026-08-13
+> 更新时间：2026-08-23
 >
 > 范围：跨语言目录、Python codec、TCP server、每连接大脑、消息语义、
 > 故障模式、进程生命周期、LangGraph/checkpoint/scheduler 与未来供应商适配
@@ -61,11 +61,11 @@
 | 多连接 TCP server | **已实现** | 使用 `ThreadingTCPServer`，每条连接由独立 handler thread 服务 |
 | 每连接独立大脑 | **已实现** | factory 为每个 handler 创建独立 brain；emitter 独占 outbound `messageSeq` |
 | 确定性战略决策 | **已实现** | 相邻玩家 `ATTACK`、可见玩家 `CHASE`、否则确定性 `PATROL` |
-| cancel/feedback/event | **已实现** | cancel 返回 ack；feedback 和 event 在连接内记录 |
+| cancel/feedback/event | **已实现** | cancel 返回 ack；feedback/event 经有界 inbox 去重并两阶段消费 |
 | 五种故障模式 | **已实现** | `normal`、`delay`、`malformed`、`disconnect`、`no-read` |
 | 结构化 ready 信号 | **已实现** | bind 成功后向 stdout 写出单行 JSON |
 | 可插拔 brain factory | **已实现** | `deterministic` 与 `scripted` 通过同一 factory/emitter seam 组合 |
-| 有状态 graph 大脑 | **已实现** | LangGraph、只读工具、checkpoint、取消和全局 scheduler 由脚本 adapter 可重复驱动 |
+| 有状态 graph 大脑 | **已实现** | LangGraph、有限多步计划、只读工具、checkpoint、取消和全局 scheduler 由脚本 adapter 可重复驱动 |
 | 真实模型供应商 | **待配置** | 只定义 `ModelAdapter`；未引入具体 SDK，也不读取 API key |
 | Java 技能权威 | **已实现** | intent v2 统一进入 immutable `TacticalSkillRegistry` 校验、转换、规划和恢复 |
 | TypeScript runtime | **未实现** | 只有稳定目录边界和职责约定 |
@@ -521,8 +521,10 @@ stop_server(server)
 | 层 | 值 |
 |----|----|
 | Envelope | `agent-session.v1` |
-| Observation payload | `private-observation.v2` |
+| Observation payload | `private-observation.v3` |
 | Intent payload | `strategic-intent.v2` |
+| Action feedback | `action-feedback.v2` |
+| World event | `agent-event.v1` |
 
 这些版本在 Java/Python 间一次性硬切；旧 payload 不双读，也不能只修改一端。
 
@@ -599,6 +601,7 @@ candidate envelope
 schemaVersion
 messageId
 messageSeq
+worldId
 runId
 floorId
 agentId
@@ -675,9 +678,9 @@ Handler 收到违反协议的 frame 时记录 warning 并关闭该连接，不�
 
 | type | 主要方向 | Python 当前行为 |
 |------|----------|-----------------|
-| `observation` | Java → Python | 决策并返回一条 `submit_intent` |
-| `action_feedback` | Java → Python | 深拷贝记录，不回复 |
-| `world_event` | Java → Python | 深拷贝记录，不回复 |
+| `observation` | Java → Python | 合并已暂存执行输入；推进现有步骤或返回一条 `submit_intent` |
+| `action_feedback` | Java → Python | 按 `feedbackId` 暂存；下一 observation 时归约步骤状态 |
+| `world_event` | Java → Python | 按 `eventId` 暂存；重要事件可触发下一次重规划 |
 | `heartbeat` | Java → Python | 接受，不回复 |
 | `cancel_request` | Java → Python | 记录 decision，并返回 `cancel_ack` |
 | `submit_intent` | Python → Java | 若从连接入站收到则拒绝方向 |
@@ -729,6 +732,7 @@ decisionId
 observationSeq
 requestGeneration
 observedAtTurn
+visionMode
 self
 visibleTiles
 visibleEntities
@@ -760,6 +764,7 @@ parameters
 confidence
 validForTicks
 interruptPolicy
+planMetadata
 ```
 
 当前白名单：
@@ -790,11 +795,22 @@ Java 收到 intent 后仍需验证身份、私有知识、skill、target、TTL �
 - `decisionId`；
 - `requestGeneration`。
 
-当前 deterministic brain 把 cancelled decision id 追加到连接本地列表。它不会真正
-取消后台模型任务，因为当前没有模型任务。
+deterministic brain 只记录取消；graph brain 会传递 cancellation token，并抑制取消后的迟到结果。
 
-`action_feedback` 和 `world_event` 被深拷贝保存，使大脑可以维护连接内上下文，同时避免
-调用者后续修改原始对象。当前大脑不根据这些记录持续重规划，也不做持久化。
+graph brain 将 `action_feedback` 和 `world_event` 深拷贝进每连接的有界 inbox。snapshot 进入图后，
+只有响应成功写出，或图明确完成一次无需响应的本地转换，才提交这些 ID 的消费。步骤成功会直接
+推进下一步；失败、计划完成/取消、玩家出现、声音或消息等重要事件才进入模型重规划路径。
+
+`feedbackId` 和 `eventId` 都按当前 `runId` 去重；新 run 会清除 inbox、已消费 ID 和旧计划。
+
+### 7.5 有限多步计划
+
+`submit_plan` 接受 1–6 个步骤，并在建立计划前验证整份输入。每个步骤包含 skill、参数、TTL、
+confidence 和 interrupt policy；runtime 生成稳定 `planId / stepId / revision`，一次只把当前步骤
+投影成 `strategic-intent.v2`。Java 仍会重新验证当前步骤并规划原子 Action。
+
+执行图的反馈窗口、事件窗口、已消费 ID、计划长度、revision 和本地 reroute 次数都有固定上限。
+heartbeat 只证明连接活跃，不会触发模型调用。
 
 ---
 
@@ -1064,13 +1080,11 @@ handler 接受连接后：
 
 ## 11. Framing、吞吐与背压边界
 
-### 11.1 Python 没有第二套无限 mailbox
+### 11.1 Python 只有有界 execution inbox
 
-当前 handler 是顺序循环：读取一条、处理一条、写出 response，然后读取下一条。
-它没有在 Python 内为每个连接建立无限 request list。
-
-TCP 和 `rfile` 有缓冲，但应用层读取有明确上限。Java 侧真正负责 gameplay 不阻塞的
-有界 outbound/inbound queue 与合并规则。
+handler 顺序读取 frame；graph brain 为每条连接维护独立、固定容量的 feedback/event inbox。
+关键 feedback 满时显式失败，不静默丢弃；低优先级 event 满时淘汰最旧项。TCP 和 `rfile` 虽有
+缓冲，应用层 frame、inbox、checkpoint 窗口和已消费 ID 都有明确上限。
 
 ### 11.2 每条 response 都 flush
 
@@ -1136,7 +1150,7 @@ Recorded world_event for agentId=<id>
 这些日志不是 deterministic canonical trace。线程调度、连接时机和日志顺序可能变化，
 不能用它们做 gameplay 相等性证据。
 
-### 12.3 当前缺少的运行证据
+### 12.3 当前运行证据
 
 生产接线能够沿关联键追踪：
 
@@ -1145,12 +1159,14 @@ observationSeq
   → decisionId / requestGeneration
   → submit_intent
   → Java validation / adoption
-  → actionIndex / outcome
-  → action_feedback
+  → planId / stepId / actionIndex / outcome
+  → feedbackId / action_feedback
+  → eventId / replan trigger
 ```
 
-Python 可记录诊断耗时，但 wall-clock、thread name、socket address 不应混入 Java 的
-canonical gameplay evidence。
+Java gameplay trace 使用 `agent-runtime.trace.v4`；Python model trace 使用
+`agent-model.trace.v2`。两者只记录白名单关联和状态字段。wall-clock、thread name、socket
+address、完整 prompt/response 和自由 reasoning 不进入 canonical gameplay evidence。
 
 ---
 
@@ -1200,6 +1216,7 @@ commit 阶段
 
 collect 阶段
   complete ActionOutcome from committed world
+  evaluate current step progress / bounded local reroute
   compute next private observation
   enqueue observation / feedback / events
 ```

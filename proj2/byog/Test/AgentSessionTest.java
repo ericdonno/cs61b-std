@@ -2,6 +2,7 @@ package byog.Test;
 
 import byog.Action.Action;
 import byog.Action.ActionOutcome;
+import byog.AI.PlanMetadata;
 import byog.Bridge.AgentHandler;
 import byog.Bridge.AgentProtocol;
 import byog.Bridge.AgentProtocolCodec;
@@ -446,9 +447,9 @@ public class AgentSessionTest {
     public void worldEventsCoalesceAndPendingStorageRemainsBounded() {
         Fixture fixture = newFixture("guard-a", 4, 4);
         AgentProtocol.WorldEventData first = worldEvent(
-                AgentProtocol.WorldEventType.PLAYER_SPOTTED, 1, "player");
+                "event-player-spotted", 1, "player");
         AgentProtocol.WorldEventData latest = worldEvent(
-                AgentProtocol.WorldEventType.PLAYER_SPOTTED, 2, "player");
+                "event-player-spotted", 2, "player");
         assertEquals(AgentSession.EnqueueResult.ACCEPTED,
                 fixture.session.sendWorldEvent(first, 1));
         assertEquals(AgentSession.EnqueueResult.COALESCED,
@@ -577,6 +578,16 @@ public class AgentSessionTest {
                 type.name(), logicalTick,
                 new AgentProtocol.PositionData(3, 2),
                 relatedEntity);
+    }
+
+    private static AgentProtocol.WorldEventData worldEvent(
+            String eventId, long logicalTick, String relatedEntity) {
+        return new AgentProtocol.WorldEventData(
+                AgentProtocol.EVENT_VERSION, eventId,
+                AgentProtocol.WorldEventType.PLAYER_SPOTTED.name(),
+                logicalTick, new AgentProtocol.PositionData(3, 2),
+                relatedEntity, null, null, null,
+                AgentProtocol.OutcomeReason.NONE.name());
     }
 
     private static boolean hasEvent(
@@ -741,10 +752,15 @@ public class AgentSessionTest {
             Position position = enemy.getPosition();
             return new ActionOutcome(
                     RUN_ID, FLOOR_ID, enemy.getAgentId(),
-                    actionIndex, "remote-decision", actionIndex,
-                    "MoveAction", Action.ActionResult.SUCCESS,
+                    actionIndex, "remote-decision",
+                    "feedback-" + actionIndex, "PATROL",
+                    new PlanMetadata("remote-plan", "step-0", 0),
+                    actionIndex, "MoveAction", Action.ActionResult.SUCCESS,
                     position, position, enemy.getHp(),
-                    AgentProtocol.DecisionSource.REMOTE_AGENT, null);
+                    AgentProtocol.DecisionSource.REMOTE_AGENT, null,
+                    AgentProtocol.OutcomeReason.ACTION_COMMITTED,
+                    AgentProtocol.StepStatus.ACTIVE,
+                    AgentProtocol.PlanStatus.ACTIVE);
         }
     }
 

@@ -17,6 +17,7 @@ from .checkpoint import CheckpointManager
 from .config import RuntimeConfig
 from .graph.workflow import AgentWorkflow
 from .model.adapter import ScriptedModelAdapter
+from .model.openai_compatible import OpenAICompatibleModelAdapter
 from .model.scheduler import InferenceScheduler
 from .observability import TraceSink
 from .protocol import (
@@ -67,7 +68,7 @@ class AgentRuntimeServer(socketserver.ThreadingTCPServer):
         self.scheduler = None
         self.trace = None
         self.executor = None
-        if runtime_config.brain == "scripted":
+        if runtime_config.brain in {"scripted", "model"}:
             self.checkpoints = CheckpointManager(runtime_config.checkpoint_db)
             self.scheduler = InferenceScheduler(
                 max_concurrent=runtime_config.max_concurrent_model_calls,
@@ -81,8 +82,18 @@ class AgentRuntimeServer(socketserver.ThreadingTCPServer):
                              + runtime_config.max_queued_model_calls),
                 thread_name_prefix="agent-graph",
             )
+            adapter = (ScriptedModelAdapter()
+                       if runtime_config.brain == "scripted"
+                       else OpenAICompatibleModelAdapter(
+                           base_url=runtime_config.provider_base_url,
+                           model=runtime_config.provider_model,
+                           api_key=runtime_config.provider_api_key,
+                           timeout_seconds=runtime_config.decision_timeout_seconds,
+                           max_output_tokens=runtime_config.max_output_tokens,
+                           token_limit_field=runtime_config.provider_token_limit_field,
+                       ))
             workflow = AgentWorkflow(
-                ScriptedModelAdapter(), self.scheduler,
+                adapter, self.scheduler,
                 self.checkpoints.saver, runtime_config, self.trace,
             )
             self.brain_factory = BrainFactory(
@@ -152,7 +163,7 @@ class ConnectionResponseEmitter:
 
 
 class AgentRequestHandler(socketserver.StreamRequestHandler):
-    """Services one connection with an isolated deterministic agent."""
+    """Services one connection with an isolated agent brain."""
 
     server: AgentRuntimeServer
 
@@ -247,7 +258,7 @@ def create_server(
         raise ValueError("port must be between 0 and 65535")
     if max_frame_bytes < 1:
         raise ValueError("max_frame_bytes must be positive")
-    runtime_config = RuntimeConfig(
+    runtime_config = RuntimeConfig.from_environment(
         brain=brain, checkpoint_db=checkpoint_db,
         runtime_trace=runtime_trace,
     )
@@ -290,7 +301,7 @@ def _read_bounded_frame(
 
 def _parse_args(arguments: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run the deterministic DungeonMind agent server."
+        description="Run the DungeonMind agent server."
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9876)

@@ -332,7 +332,7 @@ public final class AgentSession implements AutoCloseable {
         }
     }
 
-    private record EventKey(String eventType, String relatedEntityId) {
+    private record EventKey(String eventId) {
     }
 
     private final AgentSessionConfig config;
@@ -596,10 +596,21 @@ public final class AgentSession implements AutoCloseable {
         }
         AgentProtocol.ActionFeedbackData data =
                 new AgentProtocol.ActionFeedbackData(
+                        AgentProtocol.FEEDBACK_VERSION,
+                        outcome.getFeedbackId(),
                         outcome.getDecisionId(),
+                        outcome.getPlanMetadata() == null ? null
+                                : outcome.getPlanMetadata().planId(),
+                        outcome.getPlanMetadata() == null ? null
+                                : outcome.getPlanMetadata().stepId(),
+                        outcome.getPlanMetadata() == null ? null
+                                : outcome.getPlanMetadata().revision(),
                         outcome.getActionIndex(),
                         outcome.getActionType(),
                         outcome.getResult().name(),
+                        outcome.getReasonCode().name(),
+                        outcome.getStepStatus().name(),
+                        outcome.getPlanStatus().name(),
                         toPositionData(outcome.getBeforePosition()),
                         toPositionData(outcome.getAfterPosition()),
                         outcome.getSelfHp(),
@@ -1462,7 +1473,7 @@ public final class AgentSession implements AutoCloseable {
 
     private static EventKey eventKey(
             AgentProtocol.WorldEventData event) {
-        return new EventKey(event.eventType(), event.relatedEntityId());
+        return new EventKey(event.eventId());
     }
 
     private static AgentProtocol.PositionData toPositionData(

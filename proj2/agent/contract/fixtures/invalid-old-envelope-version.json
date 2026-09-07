@@ -10,7 +10,7 @@
   "logicalTick": 42,
   "type": "observation",
   "data": {
-    "observationVersion": "private-observation.v2",
+    "observationVersion": "private-observation.v3",
     "decisionId": "guard-a-decision-4",
     "observationSeq": 7,
     "requestGeneration": 2,

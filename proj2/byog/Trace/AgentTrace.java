@@ -28,7 +28,7 @@ public final class AgentTrace {
      */
     public static final String LEGACY_DECISION_TRACE_VERSION = "legacy-decision.trace.v1";
     public static final String PRIVATE_PERCEPTION_TRACE_VERSION = "private-perception.trace.v1";
-    public static final String AGENT_RUNTIME_TRACE_VERSION = "agent-runtime.trace.v3";
+    public static final String AGENT_RUNTIME_TRACE_VERSION = "agent-runtime.trace.v4";
 
     /**
      * 一次敌人决策的四个生命周期节点。
@@ -59,7 +59,13 @@ public final class AgentTrace {
         PROTOCOL_ERROR,
         FACING_CHANGED,
         PATROL_TARGET_SELECTED,
-        PATROL_STATE_CHANGED
+        PATROL_STATE_CHANGED,
+        STEP_PROGRESS_EVALUATED,
+        PLAN_PAUSED,
+        PLAN_RESUMED,
+        PLAN_REPLAN_REQUIRED,
+        EVENT_ENQUEUED,
+        EVENT_CONSUMED
     }
 
     /**
@@ -155,6 +161,13 @@ public final class AgentTrace {
         public final String planId;
         public final String stepId;
         public final Integer planRevision;
+        public final String feedbackId;
+        public final String eventId;
+        public final String reasonCode;
+        public final String stepStatus;
+        public final String planStatus;
+        public final String replanTrigger;
+        public final Integer localRerouteCount;
 
         // ----- v2 感知/朝向/巡视关联字段 -----
         public final String worldId;
@@ -219,6 +232,13 @@ public final class AgentTrace {
             this.planId = null;
             this.stepId = null;
             this.planRevision = null;
+            this.feedbackId = null;
+            this.eventId = null;
+            this.reasonCode = null;
+            this.stepStatus = null;
+            this.planStatus = null;
+            this.replanTrigger = null;
+            this.localRerouteCount = null;
             this.worldId = null;
             this.visionMode = null;
             this.selfFacing = null;
@@ -273,6 +293,13 @@ public final class AgentTrace {
             this.planId = builder.planId;
             this.stepId = builder.stepId;
             this.planRevision = builder.planRevision;
+            this.feedbackId = builder.feedbackId;
+            this.eventId = builder.eventId;
+            this.reasonCode = builder.reasonCode;
+            this.stepStatus = builder.stepStatus;
+            this.planStatus = builder.planStatus;
+            this.replanTrigger = builder.replanTrigger;
+            this.localRerouteCount = builder.localRerouteCount;
             this.worldId = builder.worldId;
             this.visionMode = builder.visionMode;
             this.selfFacing = builder.selfFacing;
@@ -413,6 +440,13 @@ public final class AgentTrace {
         private String planId;
         private String stepId;
         private Integer planRevision;
+        private String feedbackId;
+        private String eventId;
+        private String reasonCode;
+        private String stepStatus;
+        private String planStatus;
+        private String replanTrigger;
+        private Integer localRerouteCount;
         private String actionType;
         private String rawActionResult;
         private Integer beforeX;
@@ -584,9 +618,99 @@ public final class AgentTrace {
                             outcome.getAfterPosition());
         }
 
+        public AgentEventBuilder progress(ActionOutcome outcome,
+                                          int rerouteCount) {
+            feedbackId = outcome.getFeedbackId();
+            reasonCode = outcome.getReasonCode().name();
+            stepStatus = outcome.getStepStatus().name();
+            planStatus = outcome.getPlanStatus().name();
+            replanTrigger = outcome.getPlanStatus()
+                    == byog.Bridge.AgentProtocol.PlanStatus.REPLAN_REQUIRED
+                    ? outcome.getReasonCode().name() : null;
+            localRerouteCount = rerouteCount;
+            if (outcome.getPlanMetadata() != null) {
+                plan(outcome.getSkillId(),
+                        outcome.getPlanMetadata().planId(),
+                        outcome.getPlanMetadata().stepId(),
+                        outcome.getPlanMetadata().revision());
+            }
+            return this;
+        }
+
+        public AgentEventBuilder event(String id, String reason) {
+            eventId = id;
+            reasonCode = reason;
+            return this;
+        }
+
         public TraceEvent build() {
             return new TraceEvent(this);
         }
+    }
+
+    /** Formats only player-useful Agent state changes; routine ticks stay silent. */
+    public static String consoleSummary(TraceEvent event) {
+        if (event == null) {
+            throw new IllegalArgumentException("event must not be null");
+        }
+        String prefix = String.format(
+                "[AI][%s][t=%d] ", event.agentId, event.logicalTick);
+        return switch (event.eventType) {
+            case AGENT_SESSION_STATE_CHANGED -> prefix + "SESSION "
+                    + display(event.validationResult)
+                    + " connection=" + display(event.connectionState);
+            case AGENT_REQUEST_SENT -> prefix + "REQUEST sent observation="
+                    + display(event.observationSeq);
+            case INTENT_ADOPTED -> prefix + "REMOTE intent="
+                    + display(event.skillId);
+            case LOCAL_BRAIN_TAKEOVER -> prefix + "LOCAL fallback state="
+                    + display(event.executionState);
+            case REMOTE_AGENT_RESUMED -> prefix + "REMOTE resumed";
+            case AGENT_SLOW -> prefix + "SLOW request="
+                    + display(event.requestState);
+            case AGENT_HARD_TIMEOUT -> prefix
+                    + "FALLBACK reason=HARD_TIMEOUT";
+            case PROTOCOL_ERROR -> prefix + "PROTOCOL_ERROR reason="
+                    + display(event.validationResult);
+            case REFLEX_OVERRIDE_STARTED -> prefix + "REFLEX started reason="
+                    + display(event.overrideReason);
+            case REFLEX_OVERRIDE_ENDED -> prefix + "REFLEX ended";
+            case PLAN_PAUSED -> prefix + "PLAN paused skill="
+                    + display(event.skillId);
+            case PLAN_RESUMED -> prefix + "PLAN resumed skill="
+                    + display(event.skillId);
+            case PLAN_REPLAN_REQUIRED -> prefix + "REPLAN skill="
+                    + display(event.skillId) + " reason="
+                    + display(event.replanTrigger);
+            case STEP_PROGRESS_EVALUATED -> terminalStepSummary(prefix, event);
+            case ACTION_FEEDBACK_ENQUEUED -> failedActionSummary(prefix, event);
+            default -> null;
+        };
+    }
+
+    private static String terminalStepSummary(String prefix, TraceEvent event) {
+        if (!"SUCCEEDED".equals(event.stepStatus)
+                && !"FAILED".equals(event.stepStatus)
+                && !"CANCELLED".equals(event.stepStatus)) {
+            return null;
+        }
+        return prefix + "STEP " + event.stepStatus
+                + " skill=" + display(event.skillId)
+                + " plan=" + display(event.planStatus);
+    }
+
+    private static String failedActionSummary(String prefix, TraceEvent event) {
+        if (!"BLOCKED".equals(event.rawActionResult)
+                && !"INTERRUPTED".equals(event.rawActionResult)) {
+            return null;
+        }
+        return prefix + event.rawActionResult
+                + " reason=" + display(event.reasonCode)
+                + " reroute=" + display(event.localRerouteCount);
+    }
+
+    private static String display(Object value) {
+        return value == null ? "-" : value.toString();
     }
 
     /**
@@ -713,6 +837,13 @@ public final class AgentTrace {
             appendNullableStr(sb, "planId", e.planId, false);
             appendNullableStr(sb, "stepId", e.stepId, false);
             appendNullableInt(sb, "planRevision", e.planRevision, false);
+            appendNullableStr(sb, "feedbackId", e.feedbackId, false);
+            appendNullableStr(sb, "eventId", e.eventId, false);
+            appendNullableStr(sb, "reasonCode", e.reasonCode, false);
+            appendNullableStr(sb, "stepStatus", e.stepStatus, false);
+            appendNullableStr(sb, "planStatus", e.planStatus, false);
+            appendNullableStr(sb, "replanTrigger", e.replanTrigger, false);
+            appendNullableInt(sb, "localRerouteCount", e.localRerouteCount, false);
             appendNullableStr(sb, "actionType", e.actionType, false);
             appendNullableStr(
                     sb, "rawActionResult", e.rawActionResult, false);

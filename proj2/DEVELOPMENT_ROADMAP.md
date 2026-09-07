@@ -2,7 +2,7 @@
 
 > 状态：当前开发路线与跨 AI 交接基准
 >
-> 本路线图服从 [PROJECT_INTENT_zh-CN.md](PROJECT_INTENT_zh-CN.md)。它规定阶段目标、硬约束、阶段间输入输出和验收门槛；[AI_TICK_ARCHITECTURE.md](AI_TICK_ARCHITECTURE.md) 规定 Phase 2+ 的异步 Agent runtime、模型延迟与分层执行契约；当前阶段的具体实现由对应 `PHASE_N_SPEC.md` 根据真实代码展开。[LLMBrain_Agent_Build_Guide.md](documents/LLMBrain_Agent_Build_Guide.md) 保留为历史方案，不作为当前执行顺序。
+> 本路线图服从 [PROJECT_INTENT_zh-CN.md](PROJECT_INTENT_zh-CN.md)。它规定阶段目标、硬约束、阶段间输入输出和验收门槛；[AI_TICK_ARCHITECTURE.md](AI_TICK_ARCHITECTURE.md) 规定 Phase 2+ 的异步 Agent runtime、模型延迟与分层执行契约；当前阶段的具体实现由对应 `PHASE_N_SPEC.md` 根据真实代码展开。[LLMBrain_Agent_Build_Guide.md](documents/archive/designs/legacy-agent-build-guide.md) 保留为历史方案，不作为当前执行顺序。
 
 ## 1. 文档体系与优先级
 
@@ -171,7 +171,7 @@ commit barrier、deterministic fake runtime 与 Completion。
 **本阶段不做**：完整复杂战术技能库、多个敌人共享上下文、自动共享黑板、跨楼层长期记忆。
 
 **完成状态（2026-08-13）**：供应商无关实现与自动化闸门已完成，证据见
-[`PHASE_3_COMPLETION.md`](PHASE_3_COMPLETION.md)。真实 provider smoke 等 Builder 后续配置自己的
+[`PHASE_3_COMPLETION.md`](documents/phases/phase-3/PHASE_3_COMPLETION.md)。真实 provider smoke 等 Builder 后续配置自己的
 API/adapter 后补验。
 
 ### 阶段 4：执行反馈与事件驱动重规划
@@ -190,6 +190,10 @@ API/adapter 后补验。
 - 计划承诺期、暂停、恢复、取消和重新规划规则；任何快脑覆盖都保留原决策关联并产生反馈。
 
 **完成标准**：至少一个多步骤计划能够跨多个 action tick 执行，并在步骤失败或关键前提改变时产生可追踪反馈和重新规划；没有重要事件时不会固定频率滥用 LLM；等待推理时游戏和低层反射继续运行。
+
+**实现状态（2026-08-23）**：provider-neutral 生产实现与全部自动化闸门已完成，见
+[`PHASE_4_COMPLETION.md`](PHASE_4_COMPLETION.md)。GUI 人工 `PLAY-01` 与真实 provider smoke
+仍待 Builder 配置/操作，因此尚不宣称完整人工验收。
 
 ### 阶段 5：独立多 Agent 通信
 

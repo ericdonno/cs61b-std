@@ -1,6 +1,8 @@
 package byog.AI;
 
 import byog.Action.Action;
+import byog.Action.ActionOutcome;
+import byog.Bridge.AgentProtocol;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -69,6 +71,15 @@ public final class TacticalSkillRegistry {
             StrategicIntent intent, ReflexObservation observation) {
         TacticalSkill skill = skills.get(intent.getSkillId());
         return skill != null && skill.canResume(intent, observation);
+    }
+
+    public StepProgress evaluateProgress(
+            StrategicIntent intent, SkillProgressContext context,
+            ActionOutcome committedOutcome) {
+        TacticalSkill skill = skills.get(intent.getSkillId());
+        return skill == null
+                ? StepProgress.failed(AgentProtocol.OutcomeReason.PRECONDITION_CHANGED)
+                : skill.evaluateProgress(intent, context, committedOutcome);
     }
 
     public boolean contains(String id) {

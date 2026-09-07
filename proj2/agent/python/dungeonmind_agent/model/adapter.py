@@ -40,6 +40,10 @@ class ModelInput:
     call_index: int
     observation: dict[str, Any]
     messages: tuple[dict[str, Any], ...]
+    active_plan: dict[str, Any] | None = None
+    feedback: tuple[dict[str, Any], ...] = ()
+    events: tuple[dict[str, Any], ...] = ()
+    replan_triggers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -75,8 +79,8 @@ class ScriptedModelAdapter:
                 distance = abs(target["x"] - self_position["x"]) + abs(
                     target["y"] - self_position["y"]
                 )
-                skill = "ATTACK" if distance == 1 else "CHASE"
-                parameters = {"targetPosition": target}
+                skills = ["ATTACK"] if distance == 1 else ["CHASE", "ATTACK"]
+                parameters = [{"targetPosition": target} for _ in skills]
             else:
                 candidates = sorted(
                     (tile for tile in observation["visibleTiles"]
@@ -84,13 +88,14 @@ class ScriptedModelAdapter:
                      != (self_position["x"], self_position["y"])),
                     key=lambda tile: (tile["x"], tile["y"], tile["type"]),
                 )
-                skill = "PATROL"
-                parameters = ({"targetPosition": {
+                patrol_parameters = ({"targetPosition": {
                     "x": candidates[0]["x"], "y": candidates[0]["y"]}}
                     if candidates else {})
-            calls = (ToolCall("submit-0", "submit_strategic_intent", {
+                skills = ["PATROL", "GUARD"]
+                parameters = [patrol_parameters, patrol_parameters]
+            steps = [{
                 "skill": skill,
-                "parameters": parameters,
+                "parameters": step_parameters,
                 "confidence": 0.9,
                 "validForTicks": 12,
                 "interruptPolicy": {
@@ -98,5 +103,6 @@ class ScriptedModelAdapter:
                     "respondToAdjacentThreat": True,
                     "allowLocalReroute": skill != "ATTACK",
                 },
-            }),)
+            } for skill, step_parameters in zip(skills, parameters)]
+            calls = (ToolCall("submit-0", "submit_plan", {"steps": steps}),)
         return ModelResponse(calls, ModelUsage(32, 16, estimated=True))

@@ -124,9 +124,10 @@ def exchange_observation(
     return response
 
 
-def run_embedded_smoke() -> dict[str, Any]:
+def run_embedded_smoke(*, brain: str = "deterministic",
+                       timeout_seconds: float = 12.0) -> dict[str, Any]:
     """Starts a real local server and executes one bounded exchange."""
-    server = create_server("127.0.0.1", 0, mode="normal")
+    server = create_server("127.0.0.1", 0, mode="normal", brain=brain)
     worker = threading.Thread(
         target=server.serve_forever,
         kwargs={"poll_interval": 0.05},
@@ -136,7 +137,9 @@ def run_embedded_smoke() -> dict[str, Any]:
     worker.start()
     try:
         host, port = server.server_address
-        return exchange_observation(host, port, build_observation())
+        return exchange_observation(
+            host, port, build_observation(), timeout_seconds=timeout_seconds
+        )
     finally:
         stop_server(server)
         worker.join(timeout=2.0)
@@ -151,6 +154,11 @@ def _parse_args(arguments: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9876)
     parser.add_argument("--spawn-server", action="store_true")
+    parser.add_argument(
+        "--brain", choices=("deterministic", "scripted", "model"),
+        default="deterministic",
+    )
+    parser.add_argument("--timeout-seconds", type=float, default=12.0)
     return parser.parse_args(arguments)
 
 
@@ -158,10 +166,13 @@ def main(arguments: list[str] | None = None) -> int:
     """Runs the smoke exchange against a server or an embedded runtime."""
     args = _parse_args(arguments)
     response = (
-        run_embedded_smoke()
+        run_embedded_smoke(
+            brain=args.brain, timeout_seconds=args.timeout_seconds
+        )
         if args.spawn_server
         else exchange_observation(
-            args.host, args.port, build_observation()
+            args.host, args.port, build_observation(),
+            timeout_seconds=args.timeout_seconds,
         )
     )
     summary = {

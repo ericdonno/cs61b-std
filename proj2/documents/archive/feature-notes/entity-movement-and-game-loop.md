@@ -1,0 +1,104 @@
+这是一个很好的工程设计问题。在游戏开发中，实体移动速率与主循环的控制通常有以下几种经典方案：
+
+---
+
+## 方案一：固定时间步长（Fixed Timestep）
+
+**核心思想**：将逻辑更新与渲染帧率解耦，保证游戏逻辑在不同性能设备上行为一致。
+
+```
+主循环结构：
+┌─────────────────────────────────────┐
+│  while (running)                    │
+│  ├─ 计算 deltaTime (距上次更新时间)  │
+│  ├─ 累加时间到 accumulator           │
+│  ├─ while (accumulator >= FIXED_STEP)│
+│  │   ├─ updateAI()                  │  ← 逻辑更新固定频率
+│  │   └─ accumulator -= FIXED_STEP   │
+│  ├─ render()                        │  ← 渲染尽可能快
+│  └─ sleep()                         │
+└─────────────────────────────────────┘
+```
+
+**优点**：逻辑稳定，跨平台一致  
+**缺点**：实现稍复杂，需要插值渲染
+
+---
+
+## 方案二：基于 DeltaTime 的缩放
+
+**核心思想**：每帧计算耗时，移动距离乘以时间因子。
+
+```java
+// 每帧记录耗时
+long currentTime = System.currentTimeMillis();
+float deltaTime = (currentTime - lastTime) / 1000.0f;
+lastTime = currentTime;
+
+// 移动时乘以 deltaTime
+position.x += speed * direction.x * deltaTime;
+```
+
+**优点**：平滑，与帧率自适应  
+**缺点**：浮点精度问题，极端帧率下可能不稳定
+
+---
+
+## 方案三：Tick 计数器（当前项目推荐）
+
+**核心思想**：每 N 帧执行一次移动，简单直接。
+
+```java
+// Enemy.java 中
+private int moveInterval = 5;  // 每 5 帧移动一次
+private int tickCounter = 0;
+
+public void updateAI(TETile[][] world, EntityManager entityMgr) {
+    tickCounter++;
+    if (tickCounter >= moveInterval) {
+        tickCounter = 0;
+        // 执行移动逻辑
+    }
+}
+```
+
+**优点**：实现简单，可控性强  
+**缺点**：帧率变化会影响实际速度
+
+---
+
+## 方案四：冷却时间机制（Cooldown）
+
+**核心思想**：每个实体维护独立的冷却计时器。
+
+```java
+private long lastMoveTime = 0;
+private long moveCooldownMs = 200;  // 200ms 冷却
+
+public void updateAI(long currentTime) {
+    if (currentTime - lastMoveTime >= moveCooldownMs) {
+        lastMoveTime = currentTime;
+        // 执行移动逻辑
+    }
+}
+```
+
+**优点**：精确控制时间间隔  
+**缺点**：需要时间戳管理
+
+---
+
+## 当前项目的最佳选择
+
+结合你项目的现状（[Game.java](../../../byog/Core/Game.java#L69) 中 `StdDraw.pause(16)` 固定 60FPS），**方案三（Tick 计数器）** 是最适合的：
+
+1. 当前主循环已经稳定在 ~60FPS
+2. 实现简单，不需要改动主循环结构
+3. `moveInterval = 5` 即可将敌人速度从 60 次/秒降到 12 次/秒
+4. 可以在 Enemy 类内部独立控制，不影响其他实体
+
+如果你希望更精细的控制，可以后续升级为 **方案一（固定时间步长）**，将 AI 更新频率固定为独立的 tick 速率。
+
+---
+
+你是否希望我按照计划文档中的方案三来实现这个修改？

@@ -6,7 +6,9 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .state import StrategicIntentModel
+from .state import (
+    ActivePlan, PlanStep, PlanStepSubmission, intent_for_plan,
+)
 
 
 EVIDENCE_TOOLS = frozenset({
@@ -24,6 +26,7 @@ class ToolRuntime:
             "read_self": self._read_self,
             "check_skill_candidate": self._check_skill_candidate,
             "submit_strategic_intent": self._submit_strategic_intent,
+            "submit_plan": self._submit_plan,
         }
         handler = handlers.get(name)
         if handler is None:
@@ -74,21 +77,62 @@ class ToolRuntime:
     @staticmethod
     def _submit_strategic_intent(arguments: dict[str, Any],
                                  state: dict[str, Any]) -> dict[str, Any]:
+        return ToolRuntime._create_plan([arguments], state)
+
+    @staticmethod
+    def _submit_plan(arguments: dict[str, Any],
+                     state: dict[str, Any]) -> dict[str, Any]:
+        if set(arguments) != {"steps"} or not isinstance(arguments["steps"], list):
+            return {"code": "INVALID_ARGUMENTS"}
+        return ToolRuntime._create_plan(arguments["steps"], state)
+
+    @staticmethod
+    def _create_plan(raw_steps: list[dict[str, Any]],
+                     state: dict[str, Any]) -> dict[str, Any]:
         if not state.get("evidence_tool_used", False):
             return {"code": "EVIDENCE_REQUIRED"}
-        skill = arguments.get("skill")
-        if skill not in state["observation"]["capabilities"]["supportedSkills"]:
-            return {"code": "UNSUPPORTED_SKILL"}
-        payload = dict(arguments)
-        payload["intentVersion"] = "strategic-intent.v2"
-        payload["planMetadata"] = {
-            "planId": f"{state['decision_id']}:plan",
-            "stepId": "intent-0",
-            "revision": 0,
-        }
-        try:
-            intent = StrategicIntentModel.model_validate(payload)
-        except ValidationError:
+        if not 1 <= len(raw_steps) <= 6:
             return {"code": "INVALID_ARGUMENTS"}
-        state["candidate_intent"] = intent.wire_dict()
+        try:
+            submissions = [PlanStepSubmission.model_validate(item)
+                           for item in raw_steps]
+        except (ValidationError, TypeError):
+            return {"code": "INVALID_ARGUMENTS"}
+        supported = state["observation"]["capabilities"]["supportedSkills"]
+        if any(step.skill not in supported for step in submissions):
+            return {"code": "UNSUPPORTED_SKILL"}
+        if any(not ToolRuntime._valid_parameters(step)
+               for step in submissions):
+            return {"code": "INVALID_ARGUMENTS"}
+        sequence = state.get("plan_sequence", 0) + 1
+        previous = state.get("active_plan")
+        previous_revision = -1 if previous is None else previous["revision"]
+        revision = previous_revision + 1
+        if revision > 32:
+            return {"code": "PLAN_REVISION_LIMIT"}
+        plan_id = f"{state['decision_id']}:plan:{sequence}"
+        steps = tuple(PlanStep(
+            **submission.model_dump(by_alias=True),
+            stepId=f"step-{index}",
+            status="ACTIVE" if index == 0 else "PENDING",
+        ) for index, submission in enumerate(submissions))
+        plan = ActivePlan(planId=plan_id, revision=revision, steps=steps,
+                          currentStepIndex=0, status="ACTIVE")
+        state["active_plan"] = plan.model_dump(by_alias=True, mode="json")
+        state["plan_sequence"] = sequence
+        state["candidate_intent"] = intent_for_plan(plan)
         return {"code": "OK"}
+
+    @staticmethod
+    def _valid_parameters(step: PlanStepSubmission) -> bool:
+        parameters = step.parameters
+        if step.skill == "PATROL" and not parameters:
+            return True
+        if set(parameters) != {"targetPosition"}:
+            return False
+        target = parameters["targetPosition"]
+        if not isinstance(target, dict) or set(target) != {"x", "y"}:
+            return False
+        return all(isinstance(target[key], int)
+                   and not isinstance(target[key], bool)
+                   for key in ("x", "y"))

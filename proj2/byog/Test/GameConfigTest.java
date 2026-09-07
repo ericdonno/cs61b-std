@@ -152,6 +152,35 @@ public class GameConfigTest {
         assertEquals(12000, config.toAgentSessionConfig().getPort());
     }
 
+    @Test
+    public void launcherRuntimeOverridesOnlyAgentConnectionSettings() {
+        String previousHost = System.getProperty("dungeonmind.agent.host");
+        String previousPort = System.getProperty("dungeonmind.agent.port");
+        try {
+            System.setProperty("dungeonmind.agent.host", "127.0.0.2");
+            System.setProperty("dungeonmind.agent.port", "23456");
+            Properties values = new Properties();
+            values.setProperty("agent.bridge.enabled", "false");
+            GameConfig config = new GameConfig(Difficulty.BALANCED, values);
+
+            assertTrue(config.toAgentSessionConfig().isEnabled());
+            assertEquals("127.0.0.2",
+                    config.toAgentSessionConfig().getHost());
+            assertEquals(23456, config.toAgentSessionConfig().getPort());
+        } finally {
+            restoreSystemProperty("dungeonmind.agent.host", previousHost);
+            restoreSystemProperty("dungeonmind.agent.port", previousPort);
+        }
+    }
+
+    private static void restoreSystemProperty(String key, String value) {
+        if (value == null) {
+            System.clearProperty(key);
+        } else {
+            System.setProperty(key, value);
+        }
+    }
+
     private static TETile[][] openWorld(int width, int height) {
         TETile[][] world = new TETile[width][height];
         for (int x = 0; x < width; x++) {

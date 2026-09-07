@@ -20,7 +20,10 @@ class BrainFactory:
     def create(self, emitter: ResponseEmitter) -> RuntimeBrain:
         if self._brain == "deterministic":
             return DeterministicBrain(emitter)
-        if self._brain == "scripted" and self._workflow is not None \
+        if self._brain in {"scripted", "model"} and self._workflow is not None \
                 and self._executor is not None:
-            return GraphAgentBrain(self._workflow, emitter, self._executor)
-        raise ValueError("model provider is not configured")
+            return GraphAgentBrain(
+                self._workflow, emitter, self._executor,
+                self._workflow.config,
+            )
+        raise ValueError("graph brain is not configured")

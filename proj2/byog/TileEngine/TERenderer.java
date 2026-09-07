@@ -4,6 +4,8 @@ import edu.princeton.cs.introcs.StdDraw;
 
 import java.awt.Color;
 import java.awt.Font;
+import java.awt.Window;
+import javax.swing.JFrame;
 
 /**
  * Utility class for rendering tiles. You do not need to modify this file. You're welcome
@@ -42,6 +44,17 @@ public class TERenderer {
 
         StdDraw.enableDoubleBuffering();
         StdDraw.show();
+        terminateProcessWhenWindowCloses();
+    }
+
+    /** StdDraw otherwise hides its frame while leaving the game loop alive. */
+    private static void terminateProcessWhenWindowCloses() {
+        for (Window window : Window.getWindows()) {
+            if (window instanceof JFrame) {
+                ((JFrame) window).setDefaultCloseOperation(
+                        JFrame.EXIT_ON_CLOSE);
+            }
+        }
     }
 
     /**

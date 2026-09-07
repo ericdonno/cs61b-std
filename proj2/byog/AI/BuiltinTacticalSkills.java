@@ -1,6 +1,8 @@
 package byog.AI;
 
 import byog.Action.Action;
+import byog.Action.ActionOutcome;
+import byog.Bridge.AgentProtocol;
 import byog.Perception.ObservationEnvelope;
 import byog.Perception.VisibleEntity;
 import byog.Perception.VisibleTile;
@@ -119,6 +121,23 @@ public final class BuiltinTacticalSkills {
             VisibleEntity player = observation.getVisiblePlayer();
             return player != null && target.equals(player.getPosition());
         }
+
+        protected static StepProgress blockedProgress(
+                SkillProgressContext context) {
+            if (context.allowLocalReroute()
+                    && context.localRerouteCount() == 0
+                    && context.consecutiveBlocked() == 1) {
+                return StepProgress.active(
+                        AgentProtocol.OutcomeReason.LOCAL_REROUTE, true);
+            }
+            return StepProgress.failed(
+                    AgentProtocol.OutcomeReason.REPEATED_BLOCKED);
+        }
+
+        protected static boolean blocked(ActionOutcome outcome) {
+            return outcome.getResult() == Action.ActionResult.BLOCKED
+                    || outcome.getResult() == Action.ActionResult.INTERRUPTED;
+        }
     }
 
     private static final class PatrolSkill extends TargetSkill {
@@ -139,6 +158,20 @@ public final class BuiltinTacticalSkills {
         public boolean canResume(
                 StrategicIntent intent, ReflexObservation observation) {
             return !observation.canSeePlayer();
+        }
+
+        @Override
+        public StepProgress evaluateProgress(
+                StrategicIntent intent, SkillProgressContext context,
+                ActionOutcome outcome) {
+            if (context.observation().getSelfPosition()
+                    .equals(intent.getTargetPosition())) {
+                return StepProgress.succeeded(
+                        AgentProtocol.OutcomeReason.COMMITMENT_COMPLETED);
+            }
+            return blocked(outcome) ? blockedProgress(context)
+                    : StepProgress.active(
+                    AgentProtocol.OutcomeReason.ACTION_COMMITTED, false);
         }
     }
 
@@ -165,6 +198,26 @@ public final class BuiltinTacticalSkills {
         public boolean canResume(
                 StrategicIntent intent, ReflexObservation observation) {
             return playerMatches(intent.getTargetPosition(), observation);
+        }
+
+        @Override
+        public StepProgress evaluateProgress(
+                StrategicIntent intent, SkillProgressContext context,
+                ActionOutcome outcome) {
+            ReflexObservation observation = ReflexObservation.from(
+                    context.observation());
+            if (!playerMatches(intent.getTargetPosition(), observation)) {
+                return StepProgress.failed(
+                        AgentProtocol.OutcomeReason.TARGET_LOST);
+            }
+            if (manhattan(observation.getSelfPosition(),
+                    intent.getTargetPosition()) == 1) {
+                return StepProgress.succeeded(
+                        AgentProtocol.OutcomeReason.COMMITMENT_COMPLETED);
+            }
+            return blocked(outcome) ? blockedProgress(context)
+                    : StepProgress.active(
+                    AgentProtocol.OutcomeReason.ACTION_COMMITTED, false);
         }
     }
 
@@ -195,6 +248,22 @@ public final class BuiltinTacticalSkills {
                 StrategicIntent intent, ReflexObservation observation) {
             return playerMatches(intent.getTargetPosition(), observation);
         }
+
+        @Override
+        public StepProgress evaluateProgress(
+                StrategicIntent intent, SkillProgressContext context,
+                ActionOutcome outcome) {
+            if (outcome.getResult() == Action.ActionResult.DAMAGE) {
+                return StepProgress.succeeded(
+                        AgentProtocol.OutcomeReason.DAMAGE_COMMITTED);
+            }
+            ReflexObservation observation = ReflexObservation.from(
+                    context.observation());
+            return StepProgress.failed(playerMatches(
+                    intent.getTargetPosition(), observation)
+                    ? AgentProtocol.OutcomeReason.OCCUPIED_OR_TERRAIN_BLOCKED
+                    : AgentProtocol.OutcomeReason.TARGET_LOST);
+        }
     }
 
     private static final class GuardSkill extends TargetSkill {
@@ -213,6 +282,20 @@ public final class BuiltinTacticalSkills {
         public boolean canResume(
                 StrategicIntent intent, ReflexObservation observation) {
             return true;
+        }
+
+        @Override
+        public StepProgress evaluateProgress(
+                StrategicIntent intent, SkillProgressContext context,
+                ActionOutcome outcome) {
+            if (blocked(outcome)) {
+                return blockedProgress(context);
+            }
+            return context.actionQueueEmpty()
+                    ? StepProgress.succeeded(
+                    AgentProtocol.OutcomeReason.COMMITMENT_COMPLETED)
+                    : StepProgress.active(
+                    AgentProtocol.OutcomeReason.ACTION_COMMITTED, false);
         }
     }
 

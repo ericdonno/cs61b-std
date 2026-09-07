@@ -10,8 +10,10 @@ from typing import Any
 
 # Compatibility value locked by the existing Java wire contract.
 ENVELOPE_VERSION = "agent-session.v1"
-OBSERVATION_VERSION = "private-observation.v2"
+OBSERVATION_VERSION = "private-observation.v3"
 INTENT_VERSION = "strategic-intent.v2"
+FEEDBACK_VERSION = "action-feedback.v2"
+EVENT_VERSION = "agent-event.v1"
 
 DEFAULT_MAX_FRAME_BYTES = 65_536
 DEFAULT_MAX_DEPTH = 16
@@ -37,14 +39,32 @@ FACINGS = frozenset({"NORTH", "EAST", "SOUTH", "WEST"})
 VISION_MODES = frozenset({"DIRECTIONAL", "OMNIDIRECTIONAL"})
 WORLD_EVENT_TYPES = frozenset(
     {
-        "PLAN_BLOCKED",
-        "PLAN_EXHAUSTED",
         "PLAYER_SPOTTED",
+        "SOUND_HEARD",
+        "MESSAGE_RECEIVED",
+        "STEP_SUCCEEDED",
+        "STEP_FAILED",
+        "PLAN_COMPLETED",
+        "PLAN_CANCELLED",
         "REFLEX_OVERRIDE_STARTED",
         "REFLEX_OVERRIDE_ENDED",
     }
 )
 DECISION_SOURCES = frozenset({"REMOTE_AGENT", "LOCAL_FALLBACK"})
+STEP_STATUSES = frozenset({
+    "UNTRACKED", "ACTIVE", "SUCCEEDED", "FAILED", "PAUSED", "CANCELLED",
+})
+PLAN_STATUSES = frozenset({
+    "UNTRACKED", "ACTIVE", "PAUSED", "COMPLETED", "REPLAN_REQUIRED",
+    "CANCELLED",
+})
+OUTCOME_REASONS = frozenset({
+    "NONE", "ACTION_COMMITTED", "DAMAGE_COMMITTED",
+    "OCCUPIED_OR_TERRAIN_BLOCKED", "LOCAL_REROUTE", "REPEATED_BLOCKED",
+    "TARGET_LOST", "PRECONDITION_CHANGED", "COMMITMENT_COMPLETED",
+    "REFLEX_OVERRIDE_STARTED", "REFLEX_OVERRIDE_ENDED", "LEASE_INVALIDATED",
+    "PLAN_COMPLETED", "CANCELLED",
+})
 TILE_TYPES = frozenset(
     {
         "FLOOR", "WALL", "STAIRS", "NOTHING", "GRASS", "WATER",
@@ -419,10 +439,12 @@ def _interrupt_policy(value: Any) -> dict[str, bool]:
 def _action_feedback(value: Any) -> dict[str, Any]:
     data = _object(value, "action_feedback")
     fields = (
-        "decisionId",
+        "feedbackVersion", "feedbackId", "decisionId",
+        "planId", "stepId", "planRevision",
         "actionIndex",
         "actionType",
         "result",
+        "reasonCode", "stepStatus", "planStatus",
         "beforePosition",
         "afterPosition",
         "selfHp",
@@ -430,16 +452,54 @@ def _action_feedback(value: Any) -> dict[str, Any]:
         "overrideReason",
     )
     _exact_fields(data, fields, "action_feedback")
+    feedback_version = _string(data, "feedbackVersion")
+    if feedback_version != FEEDBACK_VERSION:
+        raise ProtocolViolation(
+            "UNKNOWN_PAYLOAD_VERSION", f"feedbackVersion: {feedback_version}"
+        )
     decision_source = _string(data, "decisionSource")
     if decision_source not in DECISION_SOURCES:
         raise ProtocolViolation(
             "SCHEMA_MISMATCH", f"decisionSource: {decision_source}"
         )
+    reason_code = _string(data, "reasonCode")
+    step_status = _string(data, "stepStatus")
+    plan_status = _string(data, "planStatus")
+    if reason_code not in OUTCOME_REASONS:
+        raise ProtocolViolation("SCHEMA_MISMATCH", f"reasonCode: {reason_code}")
+    if step_status not in STEP_STATUSES:
+        raise ProtocolViolation("SCHEMA_MISMATCH", f"stepStatus: {step_status}")
+    if plan_status not in PLAN_STATUSES:
+        raise ProtocolViolation("SCHEMA_MISMATCH", f"planStatus: {plan_status}")
+    plan_id = _nullable_string(data, "planId")
+    step_id = _nullable_string(data, "stepId")
+    revision = _nullable_integer(data, "planRevision", bits=32)
+    if any(item is not None for item in (plan_id, step_id, revision)) and any(
+        item is None for item in (plan_id, step_id, revision)
+    ):
+        raise ProtocolViolation("SCHEMA_MISMATCH", "partial plan metadata")
+    has_plan = plan_id is not None
+    if decision_source == "REMOTE_AGENT" and not has_plan:
+        raise ProtocolViolation(
+            "SCHEMA_MISMATCH", "remote feedback requires plan metadata"
+        )
+    if decision_source == "LOCAL_FALLBACK" and has_plan:
+        raise ProtocolViolation(
+            "SCHEMA_MISMATCH", "local feedback cannot carry plan metadata"
+        )
     return {
+        "feedbackVersion": feedback_version,
+        "feedbackId": _string(data, "feedbackId"),
         "decisionId": _string(data, "decisionId"),
+        "planId": plan_id,
+        "stepId": step_id,
+        "planRevision": revision,
         "actionIndex": _integer(data, "actionIndex", bits=32),
         "actionType": _string(data, "actionType"),
         "result": _string(data, "result"),
+        "reasonCode": reason_code,
+        "stepStatus": step_status,
+        "planStatus": plan_status,
         "beforePosition": _position(
             data["beforePosition"], "beforePosition"
         ),
@@ -480,19 +540,30 @@ def _cancel_ack(value: Any) -> dict[str, Any]:
 def _world_event(value: Any) -> dict[str, Any]:
     data = _object(value, "world_event")
     fields = (
-        "eventType",
+        "eventVersion", "eventId", "eventType",
         "logicalTick",
         "relatedPosition",
         "relatedEntityId",
+        "decisionId", "planId", "stepId", "reasonCode",
     )
     _exact_fields(data, fields, "world_event")
+    event_version = _string(data, "eventVersion")
+    if event_version != EVENT_VERSION:
+        raise ProtocolViolation(
+            "UNKNOWN_PAYLOAD_VERSION", f"eventVersion: {event_version}"
+        )
     event_type = _string(data, "eventType")
     if event_type not in WORLD_EVENT_TYPES:
         raise ProtocolViolation(
             "UNKNOWN_EVENT_TYPE", f"eventType: {event_type}"
         )
     position_value = data["relatedPosition"]
+    reason_code = _nullable_string(data, "reasonCode")
+    if reason_code is not None and reason_code not in OUTCOME_REASONS:
+        raise ProtocolViolation("SCHEMA_MISMATCH", f"reasonCode: {reason_code}")
     return {
+        "eventVersion": event_version,
+        "eventId": _string(data, "eventId"),
         "eventType": event_type,
         "logicalTick": _integer(data, "logicalTick", bits=64),
         "relatedPosition": (
@@ -503,6 +574,10 @@ def _world_event(value: Any) -> dict[str, Any]:
         "relatedEntityId": _nullable_string(
             data, "relatedEntityId"
         ),
+        "decisionId": _nullable_string(data, "decisionId"),
+        "planId": _nullable_string(data, "planId"),
+        "stepId": _nullable_string(data, "stepId"),
+        "reasonCode": reason_code,
     }
 
 
@@ -722,6 +797,16 @@ def _integer(
             "OUT_OF_RANGE", f"{key} is outside signed {bits}-bit range"
         )
     return item
+
+
+def _nullable_integer(
+    value: Mapping[str, Any], key: str, *, bits: int
+) -> int | None:
+    if key not in value:
+        raise ProtocolViolation("MISSING_REQUIRED", key)
+    if value[key] is None:
+        return None
+    return _integer(value, key, bits=bits)
 
 
 def _number(value: Mapping[str, Any], key: str) -> float:

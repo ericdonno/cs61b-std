@@ -12,7 +12,9 @@ import org.junit.runners.Suite;
         TacticalSkillRegistryTest.class,
         AgentArbiterTest.class,
         AgentSessionTest.class,
-        AgentTraceContractTest.class
+        AgentTraceContractTest.class,
+        ExecutionFeedbackContractTest.class,
+        PlanProgressTest.class
 })
 public final class AgentRuntimeTestSuite {
     private AgentRuntimeTestSuite() {

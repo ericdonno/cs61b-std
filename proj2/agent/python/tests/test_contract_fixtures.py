@@ -35,7 +35,7 @@ class ContractFixtureTest(unittest.TestCase):
         self.assertEqual("world-fixture", envelope["worldId"])
         self.assertEqual("run-fixture", envelope["runId"])
         data = envelope["data"]
-        self.assertEqual("private-observation.v2",
+        self.assertEqual("private-observation.v3",
                          data["observationVersion"])
         self.assertEqual("DIRECTIONAL", data["visionMode"])
         self.assertEqual(14, data["self"]["hp"])
@@ -62,6 +62,14 @@ class ContractFixtureTest(unittest.TestCase):
         self.assertEqual([True, None, "bounded"],
                          intent["parameters"]["futureHints"])
 
+    def test_execution_fixtures_are_accepted(self) -> None:
+        feedback = validate_envelope(
+            self._load("valid-action-feedback-v2.json"))
+        event = validate_envelope(self._load("valid-world-event-v1.json"))
+        self.assertEqual("action-feedback.v2",
+                         feedback["data"]["feedbackVersion"])
+        self.assertEqual("agent-event.v1", event["data"]["eventVersion"])
+
     def test_invalid_fixtures_rejected_with_stable_codes(self) -> None:
         cases = {
             "invalid-old-envelope-version.json": "SCHEMA_MISMATCH",
@@ -72,6 +80,9 @@ class ContractFixtureTest(unittest.TestCase):
             "invalid-facing.json": "UNKNOWN_FIELD",
             "invalid-vision-mode.json": "UNKNOWN_FIELD",
             "invalid-apple-tile-type.json": "UNKNOWN_FIELD",
+            "invalid-old-feedback-version.json": "UNKNOWN_PAYLOAD_VERSION",
+            "invalid-missing-event-id.json": "MISSING_REQUIRED",
+            "invalid-unknown-step-status.json": "SCHEMA_MISMATCH",
         }
         for name, expected_code in cases.items():
             with self.subTest(name=name):

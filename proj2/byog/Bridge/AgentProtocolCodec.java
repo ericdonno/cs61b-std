@@ -915,10 +915,21 @@ public final class AgentProtocolCodec {
 
     private static JsonValue encodeActionFeedbackData(AgentProtocol.ActionFeedbackData d) {
         JsonObject obj = new JsonObject(new LinkedHashMap<>());
+        obj.members().put("feedbackVersion", new JsonString(d.feedbackVersion()));
+        obj.members().put("feedbackId", new JsonString(d.feedbackId()));
         obj.members().put("decisionId", new JsonString(d.decisionId()));
+        obj.members().put("planId", d.planId() == null
+                ? new JsonNull() : new JsonString(d.planId()));
+        obj.members().put("stepId", d.stepId() == null
+                ? new JsonNull() : new JsonString(d.stepId()));
+        obj.members().put("planRevision", d.planRevision() == null
+                ? new JsonNull() : new JsonNumber(d.planRevision(), true));
         obj.members().put("actionIndex", new JsonNumber(d.actionIndex(), true));
         obj.members().put("actionType", new JsonString(d.actionType()));
         obj.members().put("result", new JsonString(d.result()));
+        obj.members().put("reasonCode", new JsonString(d.reasonCode()));
+        obj.members().put("stepStatus", new JsonString(d.stepStatus()));
+        obj.members().put("planStatus", new JsonString(d.planStatus()));
         obj.members().put("beforePosition", encodePosition(d.beforePosition()));
         obj.members().put("afterPosition", encodePosition(d.afterPosition()));
         obj.members().put("selfHp", new JsonNumber(d.selfHp(), true));
@@ -945,11 +956,21 @@ public final class AgentProtocolCodec {
 
     private static JsonValue encodeWorldEventData(AgentProtocol.WorldEventData d) {
         JsonObject obj = new JsonObject(new LinkedHashMap<>());
+        obj.members().put("eventVersion", new JsonString(d.eventVersion()));
+        obj.members().put("eventId", new JsonString(d.eventId()));
         obj.members().put("eventType", new JsonString(d.eventType()));
         obj.members().put("logicalTick", new JsonNumber(d.logicalTick(), true));
         obj.members().put("relatedPosition", encodePosition(d.relatedPosition()));
         obj.members().put("relatedEntityId", d.relatedEntityId() == null
                 ? new JsonNull() : new JsonString(d.relatedEntityId()));
+        obj.members().put("decisionId", d.decisionId() == null
+                ? new JsonNull() : new JsonString(d.decisionId()));
+        obj.members().put("planId", d.planId() == null
+                ? new JsonNull() : new JsonString(d.planId()));
+        obj.members().put("stepId", d.stepId() == null
+                ? new JsonNull() : new JsonString(d.stepId()));
+        obj.members().put("reasonCode", d.reasonCode() == null
+                ? new JsonNull() : new JsonString(d.reasonCode()));
         return obj;
     }
 
@@ -1346,13 +1367,27 @@ public final class AgentProtocolCodec {
 
     private static DecodeResult decodeActionFeedbackData(JsonObject obj) {
         ensureOnlyFields(obj, "action_feedback",
-                "decisionId", "actionIndex", "actionType", "result",
+                "feedbackVersion", "feedbackId", "decisionId",
+                "planId", "stepId", "planRevision",
+                "actionIndex", "actionType", "result",
+                "reasonCode", "stepStatus", "planStatus",
                 "beforePosition", "afterPosition", "selfHp",
                 "decisionSource", "overrideReason");
+        String feedbackVersion = requireString(obj, "feedbackVersion");
+        if (!AgentProtocol.FEEDBACK_VERSION.equals(feedbackVersion)) {
+            return fail(FailureReason.UNKNOWN_PAYLOAD_VERSION,
+                    "feedbackVersion: " + feedbackVersion);
+        }
+        String feedbackId = requireString(obj, "feedbackId");
         String decisionId = requireString(obj, "decisionId");
         if (decisionId == null) {
             return fail(FailureReason.MISSING_REQUIRED, "decisionId");
         }
+        String planId = requireNullableString(obj, "planId");
+        String stepId = requireNullableString(obj, "stepId");
+        Long planRevisionValue = requireNullableInt(obj, "planRevision");
+        Integer planRevision = planRevisionValue == null ? null
+                : toIntExact(planRevisionValue, "planRevision");
         Long actionIndex = requireInt(obj, "actionIndex");
         if (actionIndex == null) {
             return fail(FailureReason.MISSING_REQUIRED, "actionIndex");
@@ -1364,6 +1399,17 @@ public final class AgentProtocolCodec {
         String result = requireString(obj, "result");
         if (result == null) {
             return fail(FailureReason.MISSING_REQUIRED, "result");
+        }
+        String reasonCode = requireString(obj, "reasonCode");
+        String stepStatus = requireString(obj, "stepStatus");
+        String planStatus = requireString(obj, "planStatus");
+        try {
+            AgentProtocol.OutcomeReason.valueOf(reasonCode);
+            AgentProtocol.StepStatus.valueOf(stepStatus);
+            AgentProtocol.PlanStatus.valueOf(planStatus);
+        } catch (IllegalArgumentException e) {
+            return fail(FailureReason.SCHEMA_MISMATCH,
+                    "unknown feedback status or reason");
         }
         AgentProtocol.PositionData before =
                 decodeRequiredPositionFromField(obj, "beforePosition");
@@ -1389,8 +1435,11 @@ public final class AgentProtocolCodec {
                 null, null, 0, null, null, 0, null, 0, 0,
                 AgentProtocol.MessageType.ACTION_FEEDBACK,
                 new AgentProtocol.ActionFeedbackData(
-                        decisionId, toIntExact(actionIndex, "actionIndex"),
-                        actionType, result, before, after,
+                        feedbackVersion, feedbackId, decisionId,
+                        planId, stepId, planRevision,
+                        toIntExact(actionIndex, "actionIndex"),
+                        actionType, result, reasonCode, stepStatus, planStatus,
+                        before, after,
                         toIntExact(selfHp, "selfHp"), source, overrideReason)));
     }
 
@@ -1432,8 +1481,15 @@ public final class AgentProtocolCodec {
 
     private static DecodeResult decodeWorldEventData(JsonObject obj) {
         ensureOnlyFields(obj, "world_event",
-                "eventType", "logicalTick", "relatedPosition",
-                "relatedEntityId");
+                "eventVersion", "eventId", "eventType", "logicalTick",
+                "relatedPosition", "relatedEntityId", "decisionId",
+                "planId", "stepId", "reasonCode");
+        String eventVersion = requireString(obj, "eventVersion");
+        if (!AgentProtocol.EVENT_VERSION.equals(eventVersion)) {
+            return fail(FailureReason.UNKNOWN_PAYLOAD_VERSION,
+                    "eventVersion: " + eventVersion);
+        }
+        String eventId = requireString(obj, "eventId");
         String eventType = requireString(obj, "eventType");
         if (eventType == null) {
             return fail(FailureReason.MISSING_REQUIRED, "eventType");
@@ -1451,11 +1507,25 @@ public final class AgentProtocolCodec {
                 decodeNullablePositionFromField(obj, "relatedPosition");
         String relatedEntityId =
                 requireNullableString(obj, "relatedEntityId");
+        String decisionId = requireNullableString(obj, "decisionId");
+        String planId = requireNullableString(obj, "planId");
+        String stepId = requireNullableString(obj, "stepId");
+        String reasonCode = requireNullableString(obj, "reasonCode");
+        if (reasonCode != null) {
+            try {
+                AgentProtocol.OutcomeReason.valueOf(reasonCode);
+            } catch (IllegalArgumentException e) {
+                return fail(FailureReason.SCHEMA_MISMATCH,
+                        "reasonCode: " + reasonCode);
+            }
+        }
         return new DecodeResult.Success(new AgentProtocol.Envelope(
                 null, null, 0, null, null, 0, null, 0, 0,
                 AgentProtocol.MessageType.WORLD_EVENT,
                 new AgentProtocol.WorldEventData(
-                        eventType, logicalTick, pos, relatedEntityId)));
+                        eventVersion, eventId, eventType, logicalTick, pos,
+                        relatedEntityId, decisionId, planId, stepId,
+                        reasonCode)));
     }
 
     private static DecodeResult decodeHeartbeatData(JsonObject obj) {
@@ -1579,8 +1649,15 @@ public final class AgentProtocolCodec {
                         "pendingEvents[" + index + "] must be object");
             }
             ensureOnlyFields(obj, "pendingEvents[" + index + "]",
-                    "eventType", "logicalTick", "relatedPosition",
-                    "relatedEntityId");
+                    "eventVersion", "eventId", "eventType", "logicalTick",
+                    "relatedPosition", "relatedEntityId", "decisionId",
+                    "planId", "stepId", "reasonCode");
+            String eventVersion = requireString(obj, "eventVersion");
+            if (!AgentProtocol.EVENT_VERSION.equals(eventVersion)) {
+                throw new SchemaException(FailureReason.UNKNOWN_PAYLOAD_VERSION,
+                        "eventVersion: " + eventVersion);
+            }
+            String eventId = requireString(obj, "eventId");
             String eventType = requireString(obj, "eventType");
             try {
                 AgentProtocol.WorldEventType.valueOf(eventType);
@@ -1593,8 +1670,22 @@ public final class AgentProtocolCodec {
                     decodeNullablePositionFromField(obj, "relatedPosition");
             String relatedEntityId =
                     requireNullableString(obj, "relatedEntityId");
+            String decisionId = requireNullableString(obj, "decisionId");
+            String planId = requireNullableString(obj, "planId");
+            String stepId = requireNullableString(obj, "stepId");
+            String reasonCode = requireNullableString(obj, "reasonCode");
+            if (reasonCode != null) {
+                try {
+                    AgentProtocol.OutcomeReason.valueOf(reasonCode);
+                } catch (IllegalArgumentException e) {
+                    throw new SchemaException(FailureReason.SCHEMA_MISMATCH,
+                            "reasonCode: " + reasonCode);
+                }
+            }
             result.add(new AgentProtocol.WorldEventData(
-                    eventType, logicalTick, pos, relatedEntityId));
+                    eventVersion, eventId, eventType, logicalTick, pos,
+                    relatedEntityId, decisionId, planId, stepId,
+                    reasonCode));
             index++;
         }
         return result;
@@ -1708,6 +1799,21 @@ public final class AgentProtocolCodec {
         }
         throw new SchemaException(FailureReason.TYPE_MISMATCH,
                 key + " must be string or null");
+    }
+
+    private static Long requireNullableInt(JsonObject obj, String key) {
+        if (!obj.members().containsKey(key)) {
+            throw new SchemaException(FailureReason.MISSING_REQUIRED, key);
+        }
+        JsonValue value = obj.members().get(key);
+        if (value instanceof JsonNull) {
+            return null;
+        }
+        if (value instanceof JsonNumber number && number.isInteger()) {
+            return number.longValueExact();
+        }
+        throw new SchemaException(FailureReason.TYPE_MISMATCH,
+                key + " must be integer or null");
     }
 
     private static Long requireInt(JsonObject obj, String key) {

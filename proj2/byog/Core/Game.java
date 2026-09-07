@@ -30,6 +30,7 @@ import byog.IO.WorldSaveSummary;
 import byog.IO.FileWorldSaveRepository;
 import byog.IO.Clock;
 import byog.IO.EnemySaveData;
+import byog.Perception.PerceptionSystem;
 import byog.TileEngine.TERenderer;
 import byog.TileEngine.TETile;
 import byog.TileEngine.Tileset;
@@ -371,11 +372,11 @@ public class Game {
                     }
                     StairPlacement stairs = placeStairs(result, player.getPosition(), floorLevel);
                     placeHealthPacks(result, stairs);
+                    // Session identity requires the stable world identity.
+                    worldId = "world-" + UUID.randomUUID();
                     if (agentRuntimeEnabled) {
                         beginAgentRun();
                     }
-                    // 首次保存：生成新 worldId（覆盖同名世界时也必须生成新值）。
-                    worldId = "world-" + UUID.randomUUID();
                     saveGameState();
 
                     Logger.section("Game started (new game) - " + difficulty.getKey() + ".");
@@ -644,7 +645,7 @@ public class Game {
         }
         for (int x = 0; x < world.length && x < mask.length; x++) {
             for (int y = 0; y < world[0].length && y < mask[x].length; y++) {
-                if (mask[x][y]) {
+                if (mask[x][y] && !PerceptionSystem.blocksVision(world[x][y])) {
                     StdDraw.setPenColor(new Color(255, 220, 120));
                     StdDraw.filledSquare(
                             x + 0.5, ScreenLayout.worldToScreenY(y) + 0.5,

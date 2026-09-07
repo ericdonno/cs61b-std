@@ -1,0 +1,389 @@
+# 战斗系统说明文档
+
+## 概述
+
+战斗系统是 CS61B 项目二中实现的核心玩法模块，采用回合制近战战斗机制。玩家通过按键向四个方向攻击相邻敌人，敌人在 AI 决策后自动追击并攻击玩家。系统遵循模块化设计原则，将战斗逻辑封装为独立的 `AttackAction`，与现有动作系统无缝集成。
+
+---
+
+## 一、设计理念
+
+### 1.1 核心原则
+
+| 原则 | 说明 |
+|------|------|
+| **模块化** | 战斗逻辑独立为 Action 实现，不耦合到 Entity 内部 |
+| **回合制** | 玩家先行动，敌人后行动，避免同帧互相攻击导致状态混乱 |
+| **近距战斗** | 攻击需要目标在相邻格子（上下左右），符合 Roguelike 传统 |
+| **确定性** | 伤害计算基于种子随机，保证游戏状态可重现 |
+| **可扩展** | 预留暴击、护甲等扩展点，方便未来功能迭代 |
+
+### 1.2 系统架构
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                          Game (主循环)                              │
+│  ┌──────────────┐      ┌──────────────┐      ┌──────────────┐      │
+│  │  玩家输入处理  │      │  敌人 AI 处理  │      │  帧末清理     │      │
+│  │   KeyBindings │      │   updateAI() │      │  flushPending │      │
+│  └──────┬───────┘      └──────┬───────┘      │  removeDead   │      │
+│         │                     │              └──────────────┘      │
+│         ▼                     ▼                                    │
+│  ┌──────────────┐      ┌──────────────┐                            │
+│  │  AttackAction│      │  RuleBasedBrain│                           │
+│  │  (玩家攻击)   │      │  (决策攻击)    │                           │
+│  └──────┬───────┘      └──────┬───────┘                            │
+│         │                     │                                    │
+│         └─────────────────────┼────────────────────────────────────┘
+│                               ▼
+│                    ┌───────────────────┐
+│                    │  EntityManager    │
+│                    │  (碰撞检测/查找)   │
+│                    └───────────────────┘
+│                               │
+│                               ▼
+│                    ┌───────────────────┐
+│                    │   calculateDamage │
+│                    │   dealDamage      │
+│                    │   die()           │
+│                    └───────────────────┘
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 二、核心组件
+
+### 2.1 AttackAction - 攻击动作
+
+[AttackAction.java](../../../byog/Action/AttackAction.java) 是战斗系统的核心执行单元，实现了 `Action` 接口。
+
+**执行流程：**
+
+1. **目标定位**：根据攻击方向计算目标位置
+   ```java
+   Position targetPos = new Position(
+       entity.getPosition().x + direction.dx,
+       entity.getPosition().y + direction.dy
+   );
+   ```
+
+2. **目标检测**：通过 `EntityManager.findEntityAt()` 查找目标
+   - 目标为空 → 返回 `BLOCKED`
+   - 目标是自己 → 返回 `BLOCKED`
+   - 目标已死亡 → 返回 `BLOCKED`
+
+3. **伤害计算**：根据攻击者类型计算伤害值
+   ```java
+   // 玩家：基础伤害 15，方差 5（15-20）
+   // 敌人：基础伤害 10，方差 3（10-13）
+   return baseDamage + uniform(random, variance + 1);
+   ```
+
+4. **造成伤害**：调用目标的 `setHp()` 方法，并检测死亡状态
+   ```java
+   player.setHp(Math.max(0, player.getHp() - damage));
+   if (player.getHp() <= 0) {
+       player.die();
+   }
+   ```
+
+### 2.2 EntityManager - 实体管理器
+
+[EntityManager.java](../../../byog/Entity/EntityManager.java) 提供战斗所需的空间索引服务：
+
+- `findEntityAt(Position pos)`：根据位置查找实体，用于攻击目标检测
+- 延迟更新模式：攻击造成的死亡标记在帧末通过 `removeDeadEntities()` 统一清理
+
+### 2.3 RuleBasedBrain - 敌人 AI 大脑
+
+[RuleBasedBrain.java](../../../byog/AI/RuleBasedBrain.java) 实现敌人的攻击决策逻辑：
+
+```java
+int dist = MathHelper.manhattanDistance(enemyPos, playerPos);
+
+if (dist == 1) {
+    // 相邻 → ATTACK 策略
+    return new StrategicIntent(Goal.ATTACK_PLAYER, Strategy.ATTACK, playerPos);
+} else if (dist <= sightRange) {
+    // 视野内 → CHASE 策略
+    return new StrategicIntent(Goal.CHASE, Strategy.CHASE, playerPos);
+} else {
+    // 视野外 → PATROL 策略
+    return new StrategicIntent(Goal.PATROL, Strategy.PATROL, patrolTarget);
+}
+```
+
+**决策优先级：**
+1. 曼哈顿距离 = 1 → 立即攻击
+2. 曼哈顿距离 ≤ 7 → 追击玩家
+3. 其他 → 随机巡逻
+
+### 2.4 ClassicalPlanner - 经典规划器
+
+[ClassicalPlanner.java](../../../byog/AI/ClassicalPlanner.java) 将 AI 策略转换为具体动作：
+
+```java
+if (strategy == StrategicIntent.Strategy.ATTACK) {
+    Direction attackDir = Direction.fromDelta(
+        targetPos.x - enemyPos.x, targetPos.y - enemyPos.y);
+    actions.add(new AttackAction(entityMgr, attackDir, random));
+}
+```
+
+---
+
+## 三、战斗流程
+
+### 3.1 玩家攻击流程
+
+```
+玩家按键 (F/R/C/V)
+    ↓
+attackPlayer(Direction)
+    ↓
+AttackAction.execute(world, player)
+    ↓
+findEntityAt(targetPos)
+    ↓
+calculateDamage(player) → 15~20 点伤害
+    ↓
+dealDamage(target, damage)
+    ↓
+target.die() (若 HP ≤ 0)
+    ↓
+Logger 记录战斗日志
+```
+
+### 3.2 敌人攻击流程
+
+```
+Enemy.updateAI()
+    ↓
+GameStateSnapshot (构建状态快照)
+    ↓
+RuleBasedBrain.think() → ATTACK 策略
+    ↓
+ClassicalPlanner.translate() → AttackAction
+    ↓
+ActionQueue.poll() + execute()
+    ↓
+calculateDamage(enemy) → 10~13 点伤害
+    ↓
+dealDamage(player, damage)
+    ↓
+player.die() (若 HP ≤ 0)
+    ↓
+Game 检测玩家死亡 → 暂停游戏
+```
+
+### 3.3 帧更新时序
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                        单帧执行顺序                              │
+├────────────────────────────────────────────────────────────────┤
+│  1. 处理玩家输入 (移动/攻击)                                      │
+│  2. 处理鼠标点击 (暂停按钮)                                       │
+│  3. 敌人 AI Tick (遍历所有敌人执行 updateAI)                       │
+│     ├─ 构建状态快照                                               │
+│     ├─ Brain 决策                                                 │
+│     ├─ Planner 生成动作                                           │
+│     └─ ActionQueue 执行动作                                       │
+│  4. entityMgr.flushPendingChanges() (重建空间索引)                 │
+│  5. entityMgr.removeDeadEntities() (清理死亡实体)                   │
+│  6. 检测玩家死亡 → 暂停游戏                                        │
+│  7. 绘制画面                                                      │
+│  8. StdDraw.show() + pause(16)                                   │
+└────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 四、键位设计
+
+| 按键 | 功能 | 说明 |
+|------|------|------|
+| W | 向上移动 | 基础移动 |
+| A | 向左移动 | 基础移动 |
+| S | 向下移动 | 基础移动 |
+| D | 向右移动 | 基础移动 |
+| F | 向上攻击 | 攻击相邻格子的敌人 |
+| R | 向下攻击 | 攻击相邻格子的敌人 |
+| C | 向左攻击 | 攻击相邻格子的敌人 |
+| V | 向右攻击 | 攻击相邻格子的敌人 |
+| : + Q | 保存退出 | 先保存再退出游戏 |
+| P | 暂停/恢复 | 切换暂停状态 |
+
+**设计考量：**
+- 攻击键位采用 F/R/C/V 组合，与 WASD 形成镜像布局，方便记忆
+- F（Forward）→ 上，R（Reverse）→ 下，C（Left）→ 左，V（Right）→ 右
+- 每个方向独立按键，玩家可以在不移动的情况下向任意方向攻击
+
+---
+
+## 五、伤害系统
+
+### 5.1 伤害公式
+
+```
+伤害 = baseDamage + random(0, variance)
+HP = max(0, HP - 伤害)
+```
+
+### 5.2 属性配置
+
+| 角色 | 基础伤害 | 方差 | 伤害范围 | 初始 HP |
+|------|----------|------|----------|---------|
+| 玩家 | 15 | 5 | 15~20 | 100 |
+| 敌人 | 10 | 3 | 10~13 | 10 |
+
+### 5.3 设计平衡
+
+- **玩家优势**：高 HP（100），单次攻击可击杀大部分敌人（敌人 HP = 10）
+- **敌人优势**：数量多（3~5 个），可能被围攻
+- **战斗节奏**：玩家需要 5~7 次攻击才能击杀全部敌人
+- **死亡条件**：HP ≤ 0 时自动调用 `die()`，帧末清理
+
+---
+
+## 六、UI 显示
+
+### 6.1 HP 显示
+
+[Game.java](../../../byog/Core/Game.java) 的 `drawUIBar()` 方法在顶部 UI 栏显示：
+
+```java
+StdDraw.text(5, barY, String.format("HP: %d/100", player.getHp()));
+StdDraw.text(18, barY, String.format("Enemies: %d", enemyCount));
+```
+
+### 6.2 显示位置
+
+- **HP**：左上角（X=5），白色字体
+- **敌人数量**：HP 右侧（X=18），白色字体
+- **暂停按钮**：右上角（X=76），灰色/绿色背景
+
+---
+
+## 七、存档兼容
+
+战斗系统的所有属性都已集成到现有存档机制中：
+
+- **玩家**：HP、sightRange 已在 `EntityState` 中序列化
+- **敌人**：HP、sightRange 已在 `EntityState` 中序列化
+- **战斗属性**：attackDamage、damageVariance 为默认值，无需序列化
+
+---
+
+## 八、边界情况处理
+
+| 场景 | 处理方式 | 代码位置 |
+|------|----------|----------|
+| 玩家攻击空格子 | 返回 `BLOCKED`，记录日志 | AttackAction.execute() |
+| 玩家攻击已死亡敌人 | 返回 `BLOCKED`，不造成伤害 | AttackAction.execute() |
+| 敌人攻击空格子 | AI 重新规划，不浪费行动 | RuleBasedBrain.think() |
+| HP 变为负数 | clamp 到 0，触发死亡 | AttackAction.dealDamage() |
+| 玩家死亡 | 游戏暂停，等待重新开始 | Game.playWithKeyboard() |
+| 同帧多敌人攻击玩家 | 按顺序执行，累积伤害 | Game 主循环 |
+
+---
+
+## 九、扩展方向
+
+战斗系统预留了以下扩展点：
+
+### 9.1 暴击系统
+```java
+// 在 AttackAction 中添加
+private boolean isCriticalHit() {
+    return uniform(random, 100) < 10; // 10% 暴击率
+}
+
+private int calculateDamage(Entity entity) {
+    int damage = baseDamage + uniform(random, variance + 1);
+    if (isCriticalHit()) {
+        damage *= 2;
+        Logger.info("Critical hit!");
+    }
+    return damage;
+}
+```
+
+### 9.2 护甲系统
+```java
+// 在 Player/Enemy 中添加
+private int armor;
+
+// 在 AttackAction 中修改
+private void dealDamage(Entity target, int damage) {
+    int actualDamage = Math.max(0, damage - target.getArmor());
+    // ...
+}
+```
+
+### 9.3 武器系统
+```java
+// 在 Player 中添加
+private Weapon currentWeapon;
+
+// 在 AttackAction 中修改
+private int calculateDamage(Entity entity) {
+    if (entity instanceof Player player && player.getCurrentWeapon() != null) {
+        return player.getCurrentWeapon().getDamage();
+    }
+    // ...
+}
+```
+
+### 9.4 战斗动画
+```java
+// 在 AttackAction 中添加
+private void playAttackAnimation(Entity attacker, Direction direction) {
+    // 临时改变瓦片显示，模拟攻击动画
+}
+```
+
+---
+
+## 十、代码统计
+
+| 文件 | 行数 | 说明 |
+|------|------|------|
+| AttackAction.java | 76 | 攻击动作核心实现 |
+| Game.java | ~500 | 主游戏逻辑（含战斗键位和 UI） |
+| RuleBasedBrain.java | 89 | 敌人 AI 决策 |
+| ClassicalPlanner.java | 73 | 策略到动作的翻译 |
+| EntityManager.java | 95 | 实体管理和碰撞检测 |
+| Player.java | 86 | 玩家实体（含战斗属性） |
+| Enemy.java | 122 | 敌人实体（含战斗属性） |
+| Action.java | 18 | 动作接口定义 |
+| StrategicIntent.java | 55 | 战略意图枚举 |
+
+---
+
+## 十一、编译与运行
+
+### 编译命令
+```powershell
+javac -d out/production/proj2 -cp "D:\Courses\cs61b\cs61b-std\library-sp18\javalib\stdlib-package.jar;D:\Courses\cs61b\cs61b-std\library-sp18\javalib\algs4.jar;D:\Courses\cs61b\cs61b-std\library-sp18\javalib\junit-4.12.jar;D:\Courses\cs61b\cs61b-std\library-sp18\javalib\hamcrest-core-1.3.jar;D:\Courses\cs61b\cs61b-std\library-sp18\javalib\jh61b.jar" byog/Core/*.java byog/TileEngine/*.java byog/Helper/*.java byog/lab5/Position.java
+```
+
+### 运行命令
+```powershell
+java -cp "out/production/proj2;D:\Courses\cs61b\cs61b-std\library-sp18\javalib\stdlib-package.jar;D:\Courses\cs61b\cs61b-std\library-sp18\javalib\algs4.jar" byog.Core.Main
+```
+
+---
+
+## 十二、总结
+
+战斗系统基于现有架构设计，通过以下核心机制实现：
+
+1. **模块化动作设计**：`AttackAction` 遵循现有 `Action` 接口，与 `MoveAction` 统一管理
+2. **回合制战斗**：玩家行动与敌人行动分离，通过帧更新顺序保证公平性
+3. **AI 决策链**：`RuleBasedBrain → StrategicIntent → ClassicalPlanner → ActionQueue`
+4. **伤害系统**：基础伤害 + 随机方差，保证战斗的不确定性和趣味性
+5. **UI 反馈**：实时显示 HP 和敌人数量，提供战斗状态信息
+
+系统设计兼顾了简洁性和可扩展性，当前实现满足基础战斗需求，同时预留了暴击、护甲、武器等高级功能的扩展空间。

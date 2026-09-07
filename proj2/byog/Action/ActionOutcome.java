@@ -1,6 +1,7 @@
 package byog.Action;
 
 import byog.Bridge.AgentProtocol;
+import byog.AI.PlanMetadata;
 import byog.lab5.Position;
 
 import java.util.Objects;
@@ -14,6 +15,9 @@ public final class ActionOutcome {
     private final String agentId;
     private final long logicalTick;
     private final String decisionId;
+    private final String feedbackId;
+    private final String skillId;
+    private final PlanMetadata planMetadata;
     private final int actionIndex;
     private final String actionType;
     private final Action.ActionResult result;
@@ -22,6 +26,9 @@ public final class ActionOutcome {
     private final int selfHp;
     private final AgentProtocol.DecisionSource decisionSource;
     private final String overrideReason;
+    private final AgentProtocol.OutcomeReason reasonCode;
+    private final AgentProtocol.StepStatus stepStatus;
+    private final AgentProtocol.PlanStatus planStatus;
 
     public ActionOutcome(String runId, int floorId, String agentId,
                          long logicalTick, String decisionId, int actionIndex,
@@ -30,6 +37,27 @@ public final class ActionOutcome {
                          int selfHp,
                          AgentProtocol.DecisionSource decisionSource,
                          String overrideReason) {
+        this(runId, floorId, agentId, logicalTick, decisionId,
+                "feedback-" + agentId + "-" + logicalTick + "-" + actionIndex,
+                null, null, actionIndex, actionType, result,
+                beforePosition, afterPosition, selfHp, decisionSource,
+                overrideReason, AgentProtocol.OutcomeReason.ACTION_COMMITTED,
+                AgentProtocol.StepStatus.UNTRACKED,
+                AgentProtocol.PlanStatus.UNTRACKED);
+    }
+
+    public ActionOutcome(String runId, int floorId, String agentId,
+                         long logicalTick, String decisionId,
+                         String feedbackId, String skillId,
+                         PlanMetadata planMetadata, int actionIndex,
+                         String actionType, Action.ActionResult result,
+                         Position beforePosition, Position afterPosition,
+                         int selfHp,
+                         AgentProtocol.DecisionSource decisionSource,
+                         String overrideReason,
+                         AgentProtocol.OutcomeReason reasonCode,
+                         AgentProtocol.StepStatus stepStatus,
+                         AgentProtocol.PlanStatus planStatus) {
         this.runId = requireNonBlank(runId, "runId");
         if (floorId < 1) {
             throw new IllegalArgumentException("floorId must be >= 1");
@@ -41,6 +69,9 @@ public final class ActionOutcome {
         this.agentId = requireNonBlank(agentId, "agentId");
         this.logicalTick = logicalTick;
         this.decisionId = requireNonBlank(decisionId, "decisionId");
+        this.feedbackId = requireNonBlank(feedbackId, "feedbackId");
+        this.skillId = skillId;
+        this.planMetadata = planMetadata;
         if (actionIndex < 0) {
             throw new IllegalArgumentException("actionIndex must be >= 0");
         }
@@ -52,7 +83,20 @@ public final class ActionOutcome {
         this.selfHp = selfHp;
         this.decisionSource = Objects.requireNonNull(
                 decisionSource, "decisionSource");
+        if (decisionSource == AgentProtocol.DecisionSource.REMOTE_AGENT
+                && planMetadata == null) {
+            throw new IllegalArgumentException(
+                    "remote outcome requires plan metadata");
+        }
+        if (decisionSource == AgentProtocol.DecisionSource.LOCAL_FALLBACK
+                && planMetadata != null) {
+            throw new IllegalArgumentException(
+                    "local outcome cannot carry plan metadata");
+        }
         this.overrideReason = overrideReason;
+        this.reasonCode = Objects.requireNonNull(reasonCode, "reasonCode");
+        this.stepStatus = Objects.requireNonNull(stepStatus, "stepStatus");
+        this.planStatus = Objects.requireNonNull(planStatus, "planStatus");
     }
 
     public String getRunId() {
@@ -73,6 +117,18 @@ public final class ActionOutcome {
 
     public String getDecisionId() {
         return decisionId;
+    }
+
+    public String getFeedbackId() {
+        return feedbackId;
+    }
+
+    public String getSkillId() {
+        return skillId;
+    }
+
+    public PlanMetadata getPlanMetadata() {
+        return planMetadata;
     }
 
     public int getActionIndex() {
@@ -105,6 +161,29 @@ public final class ActionOutcome {
 
     public String getOverrideReason() {
         return overrideReason;
+    }
+
+    public AgentProtocol.OutcomeReason getReasonCode() {
+        return reasonCode;
+    }
+
+    public AgentProtocol.StepStatus getStepStatus() {
+        return stepStatus;
+    }
+
+    public AgentProtocol.PlanStatus getPlanStatus() {
+        return planStatus;
+    }
+
+    public ActionOutcome withProgress(
+            AgentProtocol.OutcomeReason reason,
+            AgentProtocol.StepStatus step,
+            AgentProtocol.PlanStatus plan) {
+        return new ActionOutcome(
+                runId, floorId, agentId, logicalTick, decisionId,
+                feedbackId, skillId, planMetadata, actionIndex,
+                actionType, result, beforePosition, afterPosition, selfHp,
+                decisionSource, overrideReason, reason, step, plan);
     }
 
     private static Position copyRequired(Position value, String name) {

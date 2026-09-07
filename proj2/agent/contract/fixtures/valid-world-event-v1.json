@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "agent-session.v1",
+  "messageId": "fixture-event-1",
+  "messageSeq": 4,
+  "worldId": "world-fixture",
+  "runId": "run-fixture",
+  "floorId": 1,
+  "agentId": "guard-a",
+  "sessionEpoch": 1,
+  "logicalTick": 45,
+  "type": "world_event",
+  "data": {
+    "eventVersion": "agent-event.v1",
+    "eventId": "event-guard-a-45-0",
+    "eventType": "PLAYER_SPOTTED",
+    "logicalTick": 45,
+    "relatedPosition": {"x": 7, "y": 3},
+    "relatedEntityId": "player",
+    "decisionId": "guard-a-decision-5",
+    "planId": "plan-fixture-1",
+    "stepId": "step-0",
+    "reasonCode": "NONE"
+  }
+}

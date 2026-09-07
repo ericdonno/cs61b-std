@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "agent-session.v1",
+  "messageId": "fixture-feedback-1",
+  "messageSeq": 3,
+  "worldId": "world-fixture",
+  "runId": "run-fixture",
+  "floorId": 1,
+  "agentId": "guard-a",
+  "sessionEpoch": 1,
+  "logicalTick": 44,
+  "type": "action_feedback",
+  "data": {
+    "feedbackVersion": "action-feedback.v2",
+    "feedbackId": "feedback-guard-a-44-1",
+    "decisionId": "guard-a-decision-5",
+    "planId": "plan-fixture-1",
+    "stepId": "step-0",
+    "planRevision": 0,
+    "actionIndex": 1,
+    "actionType": "MoveAction",
+    "result": "SUCCESS",
+    "reasonCode": "ACTION_COMMITTED",
+    "stepStatus": "ACTIVE",
+    "planStatus": "ACTIVE",
+    "beforePosition": {"x": 3, "y": 3},
+    "afterPosition": {"x": 4, "y": 3},
+    "selfHp": 20,
+    "decisionSource": "REMOTE_AGENT",
+    "overrideReason": null
+  }
+}

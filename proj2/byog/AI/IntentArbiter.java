@@ -2,6 +2,7 @@ package byog.AI;
 
 import byog.Bridge.AgentProtocol;
 import byog.Action.Action;
+import byog.Action.ActionOutcome;
 import byog.Entity.EntityManager;
 import byog.TileEngine.TETile;
 import byog.Helper.Logger;
@@ -27,23 +28,37 @@ public final class IntentArbiter {
         P4_LOCAL_FALLBACK
     }
 
+    public enum ReflexTransition {
+        OVERRIDE_STARTED,
+        OVERRIDE_ESCALATED,
+        LEASE_RESUMED,
+        LEASE_INVALIDATED,
+        NO_CHANGE
+    }
+
     /** 一次 action tick 的仲裁结果 */
     public static final class ArbiterDecision {
         private final Level level;
+        private final ReflexTransition transition;
 
-        private ArbiterDecision(Level level) {
+        private ArbiterDecision(Level level, ReflexTransition transition) {
             this.level = level;
+            this.transition = transition;
         }
 
         public Level getLevel() {
             return level;
         }
+
+        public ReflexTransition getTransition() {
+            return transition;
+        }
     }
 
-    private static final ArbiterDecision P1 = new ArbiterDecision(Level.P1_REFLEX);
-    private static final ArbiterDecision P2 = new ArbiterDecision(Level.P2_REFLEX);
-    private static final ArbiterDecision P3 = new ArbiterDecision(Level.P3_LEASE);
-    private static final ArbiterDecision P4 = new ArbiterDecision(Level.P4_LOCAL_FALLBACK);
+    private static ArbiterDecision decision(
+            Level level, ReflexTransition transition) {
+        return new ArbiterDecision(level, transition);
+    }
 
     private final ReflexController reflexController;
     private final DecisionValidator validator;
@@ -91,9 +106,8 @@ public final class IntentArbiter {
 
         // P1：玩家相邻 -> 立即攻击
         if (reflexController.shouldTriggerP1(reflex)) {
-            beginOrUpdateReflexOverride(
-                    ReflexController.P1_ADJACENT_THREAT);
-            return P1;
+            return decision(Level.P1_REFLEX, beginOrUpdateReflexOverride(
+                    ReflexController.P1_ADJACENT_THREAT));
         }
 
         // P2：玩家可见且 policy 允许 -> 短期接战
@@ -102,23 +116,22 @@ public final class IntentArbiter {
                 ? currentLease.getInterruptPolicy()
                 : InterruptPolicy.safeDefault();
         if (reflexController.shouldTriggerP2(reflex, policy)) {
-            beginOrUpdateReflexOverride(
-                    ReflexController.P2_VISIBLE_PLAYER);
-            return P2;
+            return decision(Level.P2_REFLEX, beginOrUpdateReflexOverride(
+                    ReflexController.P2_VISIBLE_PLAYER));
         }
 
         // 反射覆盖结束：尝试恢复 lease
-        if (overrideActive) {
-            endReflexOverride(reflex, currentTick);
-        }
+        ReflexTransition transition = overrideActive
+                ? endReflexOverride(reflex, currentTick)
+                : ReflexTransition.NO_CHANGE;
 
         // P3：有效 lease + queue
         if (currentLease != null && currentLease.isUsableAt(currentTick)) {
-            return P3;
+            return decision(Level.P3_LEASE, transition);
         }
 
         // P4：本地 fallback
-        return P4;
+        return decision(Level.P4_LOCAL_FALLBACK, transition);
     }
 
     /**
@@ -222,13 +235,25 @@ public final class IntentArbiter {
         return overrideActive;
     }
 
+    public StepProgress evaluateProgress(
+            StrategicIntent intent, SkillProgressContext context,
+            ActionOutcome outcome) {
+        return skillRegistry.evaluateProgress(intent, context, outcome);
+    }
+
+    public void invalidateCurrentLease() {
+        if (currentLease != null) {
+            currentLease.markStale();
+        }
+    }
+
     /** 获取覆盖原因（非覆盖时为 null）。 */
     public String getOverrideReason() {
         return overrideReason;
     }
 
     /** 开始或升级反射覆盖；P2 转 P1 时同步更新原因。 */
-    private void beginOrUpdateReflexOverride(String reason) {
+    private ReflexTransition beginOrUpdateReflexOverride(String reason) {
         if (!overrideActive) {
             overrideActive = true;
             if (currentLease != null) {
@@ -237,15 +262,20 @@ public final class IntentArbiter {
             Logger.debug(
                     "IntentArbiter: reflex override started: %s",
                     reason);
+            overrideReason = reason;
+            return ReflexTransition.OVERRIDE_STARTED;
         }
+        boolean escalated = !Objects.equals(overrideReason, reason);
         overrideReason = reason;
+        return escalated ? ReflexTransition.OVERRIDE_ESCALATED
+                : ReflexTransition.NO_CHANGE;
     }
 
     /**
      * 结束反射覆盖：尝试恢复 lease。
      * 只恢复仍有效且前提仍成立的 lease。
      */
-    private void endReflexOverride(
+    private ReflexTransition endReflexOverride(
             ReflexObservation reflex, long currentTick) {
         overrideActive = false;
         String endedReason = overrideReason;
@@ -256,12 +286,15 @@ public final class IntentArbiter {
                     && currentLease.resumeAt(currentTick)) {
                 Logger.debug("IntentArbiter: reflex override ended: %s, lease resumed",
                         endedReason);
+                return ReflexTransition.LEASE_RESUMED;
             } else {
                 currentLease.markStale();
                 Logger.info("IntentArbiter: reflex override ended: %s, lease marked STALE",
                         endedReason);
+                return ReflexTransition.LEASE_INVALIDATED;
             }
         }
+        return ReflexTransition.LEASE_INVALIDATED;
     }
 
     /**

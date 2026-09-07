@@ -31,6 +31,12 @@ import static org.junit.Assert.*;
  */
 public class AgentProtocolContractTest {
 
+    @Test(expected = NullPointerException.class)
+    public void sessionIdentityRejectsMissingWorldBeforeConnection() {
+        new AgentProtocol.Identity(
+                null, "run", 1, "guard", 0, 0);
+    }
+
     private static final String RUN_ID = "test-run-001";
     private static final int FLOOR_ID = 1;
     private static final String AGENT_ID = "guard-a";

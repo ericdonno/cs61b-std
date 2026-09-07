@@ -22,6 +22,8 @@ import byog.AI.ReflexController;
 import byog.AI.ReflexObservation;
 import byog.AI.RuleBasedBrain;
 import byog.AI.StrategicIntent;
+import byog.AI.SkillProgressContext;
+import byog.AI.StepProgress;
 import byog.Bridge.AgentHandler;
 import byog.Bridge.AgentProtocol;
 import byog.Bridge.AgentProtocolCodec;
@@ -94,7 +96,15 @@ public class Enemy extends Entity {
     private boolean actionQueueWasLow;
     private boolean lastReflexOverrideState;
     private long lastAgentRequestTick;
+    private long lastHeartbeatTick;
     private long lastSessionLifecycleSequence;
+    private String progressPlanId;
+    private String progressStepId;
+    private int consecutiveBlocked;
+    private int localRerouteCount;
+    private boolean lastPlayerVisible;
+    private IntentArbiter.ReflexTransition lastReflexTransition =
+            IntentArbiter.ReflexTransition.NO_CHANGE;
     /** 可保存的确定性巡视状态；换层重置、读档恢复。 */
     private final PatrolState patrolState;
     private final PatrolController patrolController;
@@ -142,10 +152,14 @@ public class Enemy extends Entity {
         this.actionQueueWasLow = false;
         this.lastReflexOverrideState = false;
         this.lastAgentRequestTick = Long.MIN_VALUE;
+        this.lastHeartbeatTick = Long.MIN_VALUE;
         this.lastSessionLifecycleSequence = -1;
         this.patrolState = new PatrolState();
         this.patrolController = new PatrolController();
         this.patrolSeedKey = 0L;
+        this.consecutiveBlocked = 0;
+        this.localRerouteCount = 0;
+        this.lastPlayerVisible = false;
     }
 
     /**
@@ -392,6 +406,7 @@ public class Enemy extends Entity {
         ReflexObservation reflex = latestReflexObservation;    // 反射（快脑观察）
         IntentArbiter.ArbiterDecision decision =             // decide出仲裁结果，返回决策等级
                 arbiter.decide(reflex, context.getLogicalTick());
+        lastReflexTransition = decision.getTransition();
         recordReflexTransition(
                 context, overrideWasActive, previousOverrideReason,
                 decision.getLevel().name());
@@ -584,12 +599,20 @@ public class Enemy extends Entity {
             attackCooldownTicks = attackInterval;
         }
         actionsExecutedForDecision++;
+        IntentLease executedLease = source
+                == AgentProtocol.DecisionSource.REMOTE_AGENT
+                ? arbiter.getCurrentLease() : null;
+        StrategicIntent executedIntent = executedLease == null
+                ? null : executedLease.getIntent();
         pendingAction = new PendingAction(
                 context.getRunId(), context.getFloorId(),
                 context.getLogicalTick(), decisionId,
                 actionsExecutedForDecision, action.getClass().getSimpleName(),
                 result, before, source,
-                overrideReason);
+                overrideReason,
+                executedIntent == null ? null : executedIntent.getSkillId(),
+                executedIntent == null ? null
+                        : executedIntent.getPlanMetadata(), executedIntent);
     }
 
     /**
@@ -669,13 +692,28 @@ public class Enemy extends Entity {
         ActionOutcome completedOutcome = null;
         if (pendingAction != null) {
             // 使用提交后的最终位置和生命值补全 Action Outcome。
+            AgentProtocol.StepStatus initialStep = pendingAction.planMetadata == null
+                    ? AgentProtocol.StepStatus.UNTRACKED
+                    : AgentProtocol.StepStatus.ACTIVE;
+            AgentProtocol.PlanStatus initialPlan = pendingAction.planMetadata == null
+                    ? AgentProtocol.PlanStatus.UNTRACKED
+                    : AgentProtocol.PlanStatus.ACTIVE;
             completedOutcome = new ActionOutcome(
                     pendingAction.runId, pendingAction.floorId, agentId,
                     pendingAction.logicalTick, pendingAction.decisionId,
+                    "feedback-" + agentId + "-" + pendingAction.logicalTick
+                            + "-" + pendingAction.actionIndex,
+                    pendingAction.skillId, pendingAction.planMetadata,
                     pendingAction.actionIndex, pendingAction.actionType,
                     pendingAction.result, pendingAction.beforePosition,
                     getPosition(), hp, pendingAction.decisionSource,
-                    pendingAction.overrideReason);
+                    pendingAction.overrideReason,
+                    AgentProtocol.OutcomeReason.ACTION_COMMITTED,
+                    initialStep, initialPlan);
+            if (pendingAction.planMetadata != null) {
+                completedOutcome = evaluateCommittedProgress(
+                        completedOutcome, pendingAction);
+            }
             lastActionOutcome = completedOutcome;
             pendingAction = null;
             recordPatrolOutcome(completedOutcome);
@@ -689,17 +727,26 @@ public class Enemy extends Entity {
                                             committedObservation
                                                     .getObservationSeq())
                                     .execution("COMMITTED")
-                                    .plan(planSkillId(
-                                                    completedOutcome
-                                                            .getDecisionSource()),
-                                            planId(completedOutcome
-                                                    .getDecisionSource()),
-                                            planStepId(completedOutcome
-                                                    .getDecisionSource()),
-                                            planRevision(completedOutcome
-                                                    .getDecisionSource()))
-                                    .action(completedOutcome),
+                                    .action(completedOutcome)
+                                    .progress(completedOutcome,
+                                            localRerouteCount),
                             agentSession));
+            if (completedOutcome.getPlanMetadata() != null) {
+                recordProgressEvent(
+                        context, committedObservation, completedOutcome,
+                        AgentTrace.EventType.STEP_PROGRESS_EVALUATED);
+                if (completedOutcome.getPlanStatus()
+                        == AgentProtocol.PlanStatus.REPLAN_REQUIRED) {
+                    recordProgressEvent(
+                            context, committedObservation, completedOutcome,
+                            AgentTrace.EventType.PLAN_REPLAN_REQUIRED);
+                } else if (completedOutcome.getPlanStatus()
+                        == AgentProtocol.PlanStatus.PAUSED) {
+                    recordProgressEvent(
+                            context, committedObservation, completedOutcome,
+                            AgentTrace.EventType.PLAN_PAUSED);
+                }
+            }
         }
 
         publishAgentUpdates(
@@ -795,36 +842,63 @@ public class Enemy extends Entity {
                                         .message(AgentProtocol.MessageType
                                                 .ACTION_FEEDBACK.name())
                                         .validation(feedbackResult.name())
-                                        .action(completedOutcome),
+                                        .action(completedOutcome)
+                                        .progress(completedOutcome,
+                                                localRerouteCount),
                                 session));
             }
         }
 
         List<AgentProtocol.WorldEventData> events =
-                collectRequestEvents(context, completedOutcome);
+                collectRequestEvents(context, observation, completedOutcome);
         boolean lowNow = actionQueue.needRefill();
-        boolean crossedLowWater = lowNow && !actionQueueWasLow;
         boolean firstObservation = session.getLatestObservation() == null;
-        boolean blocked = completedOutcome != null
-                && (completedOutcome.getResult() == Action.ActionResult.BLOCKED
-                || completedOutcome.getResult()
-                == Action.ActionResult.INTERRUPTED);
         boolean reflexChanged = lastReflexOverrideState
                 != arbiter.isInReflexOverride();
         boolean heartbeatDue = isHeartbeatDue(
                 session, context.getLogicalTick());
+        boolean eventNeedsDecision = events.stream().anyMatch(event ->
+                event.eventType().equals(
+                        AgentProtocol.WorldEventType.PLAYER_SPOTTED.name())
+                || event.eventType().equals(
+                        AgentProtocol.WorldEventType.SOUND_HEARD.name())
+                || event.eventType().equals(
+                        AgentProtocol.WorldEventType.MESSAGE_RECEIVED.name())
+                || event.eventType().equals(
+                        AgentProtocol.WorldEventType.STEP_SUCCEEDED.name())
+                || event.eventType().equals(
+                        AgentProtocol.WorldEventType.STEP_FAILED.name())
+                || event.eventType().equals(
+                        AgentProtocol.WorldEventType.PLAN_COMPLETED.name())
+                || event.eventType().equals(
+                        AgentProtocol.WorldEventType.PLAN_CANCELLED.name()));
 
-        if (firstObservation || crossedLowWater || blocked
-                || reflexChanged || heartbeatDue) {
+        if (firstObservation || eventNeedsDecision
+                || (reflexChanged && currentRemoteLeaseUnusable(
+                context.getLogicalTick()))) {
             AgentSession.RequestStartResult result = session.requestIntent(
                     observation, events, context.getLogicalTick());
             if (result != AgentSession.RequestStartResult.CLOSED) {
                 lastAgentRequestTick = context.getLogicalTick();
+                for (AgentProtocol.WorldEventData event : events) {
+                    recordWorldEvent(context, observation, event,
+                            "REQUEST_" + result.name());
+                }
             }
         } else {
             for (AgentProtocol.WorldEventData event : events) {
-                session.sendWorldEvent(event, context.getLogicalTick());
+                AgentSession.EnqueueResult result = session.sendWorldEvent(
+                        event, context.getLogicalTick());
+                if (result == AgentSession.EnqueueResult.ACCEPTED
+                        || result == AgentSession.EnqueueResult.COALESCED) {
+                    recordWorldEvent(context, observation, event,
+                            result.name());
+                }
             }
+        }
+        if (heartbeatDue) {
+            session.sendHeartbeat(context.getLogicalTick());
+            lastHeartbeatTick = context.getLogicalTick();
         }
 
         actionQueueWasLow = lowNow;
@@ -836,25 +910,55 @@ public class Enemy extends Entity {
      * Builds the minimal committed events needed to explain replanning triggers.
      */
     private List<AgentProtocol.WorldEventData> collectRequestEvents(
-            AiTickContext context, ActionOutcome completedOutcome) {
+            AiTickContext context, ObservationEnvelope observation,
+            ActionOutcome completedOutcome) {
         List<AgentProtocol.WorldEventData> events = new ArrayList<>();
         AgentProtocol.PositionData position = new AgentProtocol.PositionData(
                 getPosition().x, getPosition().y);
+        int ordinal = 0;
+        boolean playerVisible = observation.getVisiblePlayer() != null;
+        if (playerVisible && !lastPlayerVisible) {
+            events.add(worldEvent(
+                    AgentProtocol.WorldEventType.PLAYER_SPOTTED,
+                    context, position, "player", null,
+                    AgentProtocol.OutcomeReason.NONE, ordinal++));
+        }
+        for (byog.Perception.HeardEvent ignored : observation.getHeardEvents()) {
+            events.add(worldEvent(
+                    AgentProtocol.WorldEventType.SOUND_HEARD,
+                    context, position, null, null,
+                    AgentProtocol.OutcomeReason.NONE, ordinal++));
+        }
         if (completedOutcome != null
-                && (completedOutcome.getResult() == Action.ActionResult.BLOCKED
-                || completedOutcome.getResult()
-                == Action.ActionResult.INTERRUPTED)) {
-            events.add(new AgentProtocol.WorldEventData(
-                    AgentProtocol.WorldEventType.PLAN_BLOCKED.name(),
-                    context.getLogicalTick(), position, agentId));
+                && completedOutcome.getStepStatus()
+                == AgentProtocol.StepStatus.SUCCEEDED) {
+            events.add(worldEvent(
+                    AgentProtocol.WorldEventType.STEP_SUCCEEDED,
+                    context, position, agentId, completedOutcome,
+                    completedOutcome.getReasonCode(), ordinal++));
+        } else if (completedOutcome != null
+                && completedOutcome.getStepStatus()
+                == AgentProtocol.StepStatus.FAILED) {
+            events.add(worldEvent(
+                    AgentProtocol.WorldEventType.STEP_FAILED,
+                    context, position, agentId, completedOutcome,
+                    completedOutcome.getReasonCode(), ordinal++));
         }
         if (lastReflexOverrideState != arbiter.isInReflexOverride()) {
             AgentProtocol.WorldEventType type = arbiter.isInReflexOverride()
                     ? AgentProtocol.WorldEventType.REFLEX_OVERRIDE_STARTED
                     : AgentProtocol.WorldEventType.REFLEX_OVERRIDE_ENDED;
-            events.add(new AgentProtocol.WorldEventData(
-                    type.name(), context.getLogicalTick(), position, agentId));
+            events.add(worldEvent(type, context, position, agentId,
+                    completedOutcome,
+                    lastReflexTransition
+                            == IntentArbiter.ReflexTransition.LEASE_INVALIDATED
+                            ? AgentProtocol.OutcomeReason.LEASE_INVALIDATED
+                            : arbiter.isInReflexOverride()
+                            ? AgentProtocol.OutcomeReason.REFLEX_OVERRIDE_STARTED
+                            : AgentProtocol.OutcomeReason.REFLEX_OVERRIDE_ENDED,
+                    ordinal));
         }
+        lastPlayerVisible = playerVisible;
         return events;
     }
 
@@ -866,8 +970,117 @@ public class Enemy extends Entity {
         if (lastAgentRequestTick == Long.MIN_VALUE) {
             return false;
         }
-        return logicalTick - lastAgentRequestTick
+        long lastActivity = Math.max(lastAgentRequestTick, lastHeartbeatTick);
+        return lastActivity != Long.MIN_VALUE && logicalTick - lastActivity
                 >= session.getHeartbeatTicks();
+    }
+
+    private boolean currentRemoteLeaseUnusable(long logicalTick) {
+        IntentLease lease = arbiter.getCurrentLease();
+        return lease != null
+                && lease.getDecisionSource()
+                == AgentProtocol.DecisionSource.REMOTE_AGENT
+                && !lease.isValidAt(logicalTick);
+    }
+
+    private AgentProtocol.WorldEventData worldEvent(
+            AgentProtocol.WorldEventType type, AiTickContext context,
+            AgentProtocol.PositionData position, String relatedEntityId,
+            ActionOutcome outcome, AgentProtocol.OutcomeReason reason,
+            int ordinal) {
+        PlanMetadata metadata = outcome == null
+                ? activeRemotePlan(AgentProtocol.DecisionSource.REMOTE_AGENT)
+                : outcome.getPlanMetadata();
+        String decisionId = outcome == null
+                ? (arbiter.getCurrentLease() == null ? null
+                : arbiter.getCurrentLease().getDecisionId())
+                : outcome.getDecisionId();
+        return new AgentProtocol.WorldEventData(
+                AgentProtocol.EVENT_VERSION,
+                "event-" + agentId + "-" + context.getLogicalTick()
+                        + "-" + ordinal,
+                type.name(), context.getLogicalTick(), position,
+                relatedEntityId, decisionId,
+                metadata == null ? null : metadata.planId(),
+                metadata == null ? null : metadata.stepId(),
+                reason == null ? null : reason.name());
+    }
+
+    private ActionOutcome evaluateCommittedProgress(
+            ActionOutcome outcome, PendingAction action) {
+        PlanMetadata metadata = action.planMetadata;
+        if (!metadata.planId().equals(progressPlanId)
+                || !metadata.stepId().equals(progressStepId)) {
+            progressPlanId = metadata.planId();
+            progressStepId = metadata.stepId();
+            consecutiveBlocked = 0;
+            localRerouteCount = 0;
+        }
+        boolean blocked = outcome.getResult() == Action.ActionResult.BLOCKED
+                || outcome.getResult() == Action.ActionResult.INTERRUPTED;
+        consecutiveBlocked = blocked ? consecutiveBlocked + 1 : 0;
+        IntentLease lease = arbiter.getCurrentLease();
+        boolean allowReroute = lease != null
+                && lease.getInterruptPolicy().allowLocalReroute();
+        StepProgress progress;
+        if (action.overrideReason != null && arbiter.isInReflexOverride()) {
+            progress = new StepProgress(
+                    AgentProtocol.OutcomeReason.REFLEX_OVERRIDE_STARTED,
+                    AgentProtocol.StepStatus.PAUSED,
+                    AgentProtocol.PlanStatus.PAUSED, false);
+        } else {
+            progress = arbiter.evaluateProgress(
+                    action.intent,
+                    new SkillProgressContext(latestObservation,
+                            actionQueue.isEmpty(), consecutiveBlocked,
+                            localRerouteCount, allowReroute), outcome);
+        }
+        if (progress.localReroute()) {
+            localRerouteCount++;
+            actionQueue.clear();
+        } else if (progress.stepStatus()
+                == AgentProtocol.StepStatus.SUCCEEDED
+                || progress.stepStatus()
+                == AgentProtocol.StepStatus.FAILED) {
+            actionQueue.clear();
+            arbiter.invalidateCurrentLease();
+        }
+        return outcome.withProgress(progress.reasonCode(),
+                progress.stepStatus(), progress.planStatus());
+    }
+
+    private void recordProgressEvent(
+            AiTickContext context, ObservationEnvelope observation,
+            ActionOutcome outcome, AgentTrace.EventType eventType) {
+        recordAgentEvent(context, withSession(
+                AgentTrace.agentEvent(
+                        eventType, context.getRunId(), context.getFloorId(),
+                        agentId, context.getLogicalTick())
+                        .observationSequence(observation.getObservationSeq())
+                        .execution("COMMITTED")
+                        .action(outcome)
+                        .progress(outcome, localRerouteCount),
+                agentSession));
+    }
+
+    private void recordWorldEvent(
+            AiTickContext context, ObservationEnvelope observation,
+            AgentProtocol.WorldEventData worldEvent, String validation) {
+        AgentTrace.AgentEventBuilder event = AgentTrace.agentEvent(
+                AgentTrace.EventType.EVENT_ENQUEUED,
+                context.getRunId(), context.getFloorId(), agentId,
+                context.getLogicalTick())
+                .observationSequence(observation.getObservationSeq())
+                .message(AgentProtocol.MessageType.WORLD_EVENT.name())
+                .validation(validation)
+                .event(worldEvent.eventId(), worldEvent.reasonCode());
+        if (worldEvent.decisionId() != null) {
+            event.decision(worldEvent.decisionId(), null);
+        }
+        if (worldEvent.planId() != null) {
+            event.plan(null, worldEvent.planId(), worldEvent.stepId(), null);
+        }
+        recordAgentEvent(context, withSession(event, agentSession));
     }
 
     /**
@@ -1261,6 +1474,32 @@ public class Enemy extends Entity {
                     source == null ? null : source.name());
         }
         recordAgentEvent(context, withSession(event, agentSession));
+        AgentTrace.EventType planEvent = active
+                ? AgentTrace.EventType.PLAN_PAUSED
+                : lastReflexTransition
+                == IntentArbiter.ReflexTransition.LEASE_RESUMED
+                ? AgentTrace.EventType.PLAN_RESUMED
+                : lastReflexTransition
+                == IntentArbiter.ReflexTransition.LEASE_INVALIDATED
+                ? AgentTrace.EventType.PLAN_REPLAN_REQUIRED : null;
+        if (planEvent != null) {
+            AgentTrace.AgentEventBuilder planTrace = AgentTrace.agentEvent(
+                    planEvent, context.getRunId(), context.getFloorId(),
+                    agentId, context.getLogicalTick())
+                    .override(reason)
+                    .execution(executionState);
+            if (decisionId != null) {
+                planTrace.decision(decisionId,
+                        source == null ? null : source.name());
+            }
+            PlanMetadata metadata = activeRemotePlan(source);
+            if (metadata != null) {
+                planTrace.plan(null, metadata.planId(), metadata.stepId(),
+                        metadata.revision());
+            }
+            recordAgentEvent(context,
+                    withSession(planTrace, agentSession));
+        }
     }
 
     /**
@@ -1417,7 +1656,12 @@ public class Enemy extends Entity {
             AiTickContext context,
             AgentTrace.AgentEventBuilder event) {
         try {
-            context.getTraceSink().record(event.build());
+            AgentTrace.TraceEvent traceEvent = event.build();
+            String summary = AgentTrace.consoleSummary(traceEvent);
+            if (summary != null) {
+                Logger.info("%s", summary);
+            }
+            context.getTraceSink().record(traceEvent);
         } catch (RuntimeException exception) {
             Logger.error(
                     "Agent trace record failed: %s",
@@ -1440,13 +1684,18 @@ public class Enemy extends Entity {
         private final Position beforePosition;
         private final AgentProtocol.DecisionSource decisionSource;
         private final String overrideReason;
+        private final String skillId;
+        private final PlanMetadata planMetadata;
+        private final StrategicIntent intent;
 
         private PendingAction(String runId, int floorId, long logicalTick,
                               String decisionId, int actionIndex,
                               String actionType, Action.ActionResult result,
                               Position beforePosition,
                               AgentProtocol.DecisionSource decisionSource,
-                              String overrideReason) {
+                              String overrideReason, String skillId,
+                              PlanMetadata planMetadata,
+                              StrategicIntent intent) {
             this.runId = runId;
             this.floorId = floorId;
             this.logicalTick = logicalTick;
@@ -1457,6 +1706,9 @@ public class Enemy extends Entity {
             this.beforePosition = copyPosition(beforePosition);
             this.decisionSource = decisionSource;
             this.overrideReason = overrideReason;
+            this.skillId = skillId;
+            this.planMetadata = planMetadata;
+            this.intent = intent;
         }
     }
 

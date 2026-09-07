@@ -63,6 +63,7 @@ public class GameConfig {
     public GameConfig(Difficulty difficulty, Properties props) {
         this.difficulty = Objects.requireNonNull(difficulty, "difficulty");
         Objects.requireNonNull(props, "props");
+        Properties runtimeProperties = withInteractiveAgentOverride(props);
         String prefix = difficulty.getKey() + ".";
 
         playerHp = getInt(props, prefix + "player.hp", 100);
@@ -98,12 +99,12 @@ public class GameConfig {
         debugShowEnemyFov = getBoolean(props, "debug.showEnemyFov", false);
 
         agentBridgeEnabled = getBoolean(
-                props, "agent.bridge.enabled", false);
+                runtimeProperties, "agent.bridge.enabled", false);
         agentBridgeHost = getNonBlank(
-                props, "agent.bridge.host",
+                runtimeProperties, "agent.bridge.host",
                 AgentSessionConfig.DEFAULT_HOST);
         agentBridgePort = getIntInRange(
-                props, "agent.bridge.port",
+                runtimeProperties, "agent.bridge.port",
                 AgentSessionConfig.DEFAULT_PORT, 1, 65535);
 
         long softDeadline = getPositiveLong(
@@ -184,6 +185,22 @@ public class GameConfig {
         }
         agentActionQueueLowWater = lowWater;
         agentActionQueueHighWater = highWater;
+    }
+
+    /** Lets the single-click launcher inject its temporary local runtime. */
+    private static Properties withInteractiveAgentOverride(Properties props) {
+        String runtimePort = System.getProperty("dungeonmind.agent.port");
+        if (runtimePort == null || runtimePort.trim().isEmpty()) {
+            return props;
+        }
+        Properties merged = new Properties();
+        merged.putAll(props);
+        merged.setProperty("agent.bridge.enabled", "true");
+        merged.setProperty("agent.bridge.port", runtimePort);
+        String runtimeHost = System.getProperty(
+                "dungeonmind.agent.host", AgentSessionConfig.DEFAULT_HOST);
+        merged.setProperty("agent.bridge.host", runtimeHost);
+        return merged;
     }
 
     /** Builds the validated immutable subset consumed by each Agent Session. */

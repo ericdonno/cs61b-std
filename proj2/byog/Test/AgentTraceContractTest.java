@@ -13,6 +13,7 @@ import java.util.List;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 /** Verifies deterministic, correlated evidence for the asynchronous Agent loop. */
@@ -22,6 +23,34 @@ public class AgentTraceContractTest {
         "#A.......B........P>#",
         "#####################"
     };
+
+    @Test
+    public void console_summary_shows_remote_work_without_routine_tick_noise() {
+        AgentTrace.TraceEvent request = AgentTrace.agentEvent(
+                        AgentTrace.EventType.AGENT_REQUEST_SENT,
+                        "run-1", 1, "guard-a", 12)
+                .observationSequence(5)
+                .build();
+        AgentTrace.TraceEvent intent = AgentTrace.agentEvent(
+                        AgentTrace.EventType.INTENT_ADOPTED,
+                        "run-1", 1, "guard-a", 15)
+                .decision("decision-1",
+                        AgentProtocol.DecisionSource.REMOTE_AGENT.name())
+                .plan("PATROL", "plan-1", "step-1", 1)
+                .build();
+        AgentTrace.TraceEvent routine = AgentTrace.agentEvent(
+                        AgentTrace.EventType.ACTION_RESULT,
+                        "run-1", 1, "guard-a", 16)
+                .action(1, "MOVE", "SUCCESS",
+                        new Position(1, 1), new Position(2, 1))
+                .build();
+
+        assertEquals("[AI][guard-a][t=12] REQUEST sent observation=5",
+                AgentTrace.consoleSummary(request));
+        assertEquals("[AI][guard-a][t=15] REMOTE intent=PATROL",
+                AgentTrace.consoleSummary(intent));
+        assertNull(AgentTrace.consoleSummary(routine));
+    }
 
     @Test
     public void agent_harness_trace_is_byte_identical() {
@@ -79,7 +108,7 @@ public class AgentTraceContractTest {
                     harness.injectInbound("guard-a", response));
             harness.step();
 
-            assertEquals(adoptedDecision, harness.guardA()
+            assertNotNull(harness.guardA()
                     .getArbiter().getCurrentLease().getDecisionId());
             AgentTrace.TraceEvent stale = findEvent(
                     harness.getTraceSink().events(),

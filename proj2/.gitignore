@@ -8,6 +8,7 @@ run*_out.txt
 __pycache__/
 *.py[cod]
 .env
+config/provider.local
 *.sqlite
 *.sqlite3
 *.db
@@ -15,3 +16,15 @@ __pycache__/
 !agent/python/**/*.py
 !agent/python/*.toml
 !PHASE_3_COMPLETION.md
+!PHASE_4_SPEC.md
+!PHASE_4_BUILD_GUIDE.md
+!PHASE_4_COMPLETION.md
+!play.bat
+!play.ps1
+!play-model.bat
+!provider-smoke.bat
+# 文档按阶段和历史职责分目录后，继续允许 Markdown 归档入库。
+!documents/
+!documents/**/
+!documents/**/*.md
+!documents/writing/assets/*.png

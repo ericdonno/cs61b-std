@@ -18,7 +18,7 @@ from dungeonmind_agent.checkpoint import CheckpointManager
 from dungeonmind_agent.config import RuntimeConfig
 from dungeonmind_agent.graph.state import AgentKey
 from dungeonmind_agent.graph.tools import ToolRuntime
-from dungeonmind_agent.graph.workflow import AgentWorkflow
+from dungeonmind_agent.graph.workflow import AgentWorkflow, WorkflowDecision
 from dungeonmind_agent.model.adapter import (
     ModelResponse, ModelUsage, ScriptedModelAdapter,
 )
@@ -30,8 +30,8 @@ from smoke_test import build_observation
 
 
 class GraphRuntimeTest(unittest.TestCase):
-    def test_model_mode_requires_builder_configuration_before_bind(self) -> None:
-        with self.assertRaisesRegex(ValueError, "not configured"):
+    def test_model_mode_requires_complete_provider_configuration(self) -> None:
+        with self.assertRaisesRegex(ValueError, "configuration is incomplete"):
             RuntimeConfig(brain="model")
 
     def test_real_graph_uses_tools_and_isolates_checkpoint_keys(self) -> None:
@@ -47,8 +47,9 @@ class GraphRuntimeTest(unittest.TestCase):
         first_intent = workflow.decide(first, threading.Event())
         second_intent = workflow.decide(second, threading.Event())
 
-        self.assertEqual("ATTACK", first_intent["skill"])
-        self.assertEqual("strategic-intent.v2", first_intent["intentVersion"])
+        self.assertEqual("ATTACK", first_intent.intent["skill"])
+        self.assertEqual("strategic-intent.v2",
+                         first_intent.intent["intentVersion"])
         self.assertNotEqual(
             AgentKey(world_id="world-test", floor_id=1,
                      agent_id="guard/a").thread_id(),
@@ -56,8 +57,8 @@ class GraphRuntimeTest(unittest.TestCase):
                      agent_id="guard:a").thread_id(),
         )
         self.assertNotEqual(
-            first_intent["planMetadata"]["planId"],
-            second_intent["planMetadata"]["planId"],
+            first_intent.intent["planMetadata"]["planId"],
+            second_intent.intent["planMetadata"]["planId"],
         )
         scheduler.close()
         manager.close()
@@ -139,11 +140,14 @@ class GraphRuntimeTest(unittest.TestCase):
 
         class Workflow:
             def decide(self, envelope: dict[str, Any],
-                       cancellation: threading.Event) -> dict[str, Any]:
+                       cancellation: threading.Event,
+                       inputs: Any = None) -> WorkflowDecision:
                 gate.wait(timeout=2)
-                return {"intentVersion": "strategic-intent.v2"}
+                return WorkflowDecision(
+                    {"intentVersion": "strategic-intent.v2"}, (), ())
 
-            def record_feedback(self, envelope: dict[str, Any]) -> None:
+            def commit_consumption(self, envelope: dict[str, Any],
+                                   decision: WorkflowDecision) -> None:
                 pass
 
         class Emitter:

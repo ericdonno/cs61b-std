@@ -2,11 +2,11 @@
 
 > 状态：当前实现说明
 >
-> 更新时间：2026-08-13
+> 更新时间：2026-08-23
 >
 > 范围：交互式游戏入口、玩家连续移动、Game Loop、双速控制链，以及已接入生产 Game/Enemy 的 AgentSession
 >
-> 不包含：`playWithInputString()` 的旧字符串输入接口、Tool Calling、多 Agent 协作和复杂计划系统
+> 不包含：`playWithInputString()` 的旧字符串输入接口、多 Agent 协作和具体模型供应商
 
 ---
 
@@ -60,6 +60,7 @@
 | AgentSession / 有界队列 | **已接入** | 每个 Enemy 可持有独立 Session；poll/collect/close 已进入生产生命周期 |
 | AgentTransport / TCP worker | **已实现** | `SocketTransport` 独占 Socket，负责 NDJSON、退避重连和有界关闭 |
 | Python Agent runtime | **端到端接通** | 支持真实进程往返、延迟、背压、断线和恢复；不会阻塞游戏线程 |
+| 事件式多步计划 | **已实现** | Python 维护有限计划；Java 对当前步骤执行、提交、反馈和局部恢复保持权威 |
 
 读图时使用以下约定：
 
@@ -130,7 +131,8 @@ flowchart TD
 
 ### 2.1 架构概览
 
-下图展示当前 Java 实时闭环和已经接通的异步 Agent 链路；真实模型推理仍属于后续工作。
+下图展示当前 Java 实时闭环和已经接通的异步 Agent 链路；脚本 adapter 已驱动真实执行图，
+具体模型供应商仍由 Builder 选择。
 
 ```mermaid
 graph TD
@@ -188,7 +190,7 @@ graph TD
   → 放入有限容量的发送队列
   → 网络线程通过 TCP 发给 Python Agent
 
-Python Agent 生成战略 intent
+Python Agent 根据执行 inbox 推进当前计划步骤，必要时才调用模型生成战略 intent
   → 网络线程放入有限容量的接收队列
   → 下一次游戏 tick 的 poll 环节读取
   → Java 校验后决定是否采纳
@@ -397,7 +399,7 @@ sequenceDiagram
 
 | 看到的代码 | 当前真实行为 |
 |---|---|
-| `pollAgentMessages()` | 没有 Session、队列或 Socket；当前是生命周期空操作 |
+| `pollAgentMessages()` | 有界 drain Session 入站；合法 proposal 在游戏线程进入 Validator/Arbiter |
 | `tickCounter++` | 先计数，达到 `moveInterval` 才进入仲裁；随后清零 |
 | `latestObservation == null` | 直接跳过动作；初始值由 `primeEnemyObservations()` 提前生成 |
 | `translateBounded()` | 相邻 `ATTACK` 直接生成 `AttackAction`；其他情况走 BFS，只取有界前缀 |
@@ -461,7 +463,7 @@ flowchart TD
 | `ReflexObservation.isPlayerAdjacent()` | 是 | P1 |
 | `InterruptPolicy.engageVisiblePlayer()` | 是 | 允许或禁止 P2 |
 | `InterruptPolicy.respondToAdjacentThreat()` | P1 不读取 | Java 始终允许 Safety Reflex |
-| `InterruptPolicy.allowLocalReroute()` | 当前生产动作链未读取 | 已保存但尚未接入 reroute |
+| `InterruptPolicy.allowLocalReroute()` | 是 | 第一次 blocked 清空动作队列并在 Java 本地重规划；重复 blocked 要求远程重规划 |
 | `Enemy.reflexController` | 是 | 创建 P1/P2 intent |
 | `IntentArbiter.reflexController` | 是 | 判断 P1/P2 是否触发 |
 
@@ -577,6 +579,7 @@ flowchart LR
 | inbound/outbound queues | **已实现** | 隔离游戏线程与 IO，提供有界背压 |
 | TCP IO worker | **已实现** | 唯一操作 connect/read/write 的线程；短读超时保证双向推进 |
 | Python Agent runtime | **端到端接通** | 可消费 observation/feedback 并返回受限 intent；故障模式不会阻塞游戏线程 |
+| Python execution graph | **已实现** | 有界 inbox、多步计划、无模型步骤推进、事件触发重规划和两阶段消费 |
 
 更完整的 Session 状态机和失败语义见 [`session.md`](session.md)；
 外部 runtime、Python brain 和跨语言边界见 [`agentarchitecture.md`](agentarchitecture.md)。
@@ -596,6 +599,9 @@ public final class AgentSession implements AutoCloseable {
 
     public EnqueueResult sendActionFeedback(
             ActionOutcome outcome, long logicalTick);
+
+    public EnqueueResult sendWorldEvent(
+            AgentProtocol.WorldEventData event, long logicalTick);
 
     public void advanceRequestLifecycle(long logicalTick);
 
@@ -673,6 +679,7 @@ CLOSED
 - observation 可以合并为最新值；
 - heartbeat 可以低优先级丢弃；
 - action feedback 和 cancel 不能静默覆盖；
+- 反馈使用稳定 `feedbackId`，事件使用稳定 `eventId`；Python 重复收到时只消费一次；
 - 队列满也不能阻塞游戏线程；
 - 关键消息无法入队时必须进入 degraded/reconnect 路径并记录原因。
 

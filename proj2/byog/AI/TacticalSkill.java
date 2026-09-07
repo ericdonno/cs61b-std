@@ -1,6 +1,7 @@
 package byog.AI;
 
 import byog.Action.Action;
+import byog.Action.ActionOutcome;
 
 import java.util.List;
 
@@ -19,4 +20,8 @@ public interface TacticalSkill {
 
     boolean canResume(
             StrategicIntent intent, ReflexObservation observation);
+
+    StepProgress evaluateProgress(
+            StrategicIntent intent, SkillProgressContext context,
+            ActionOutcome committedOutcome);
 }

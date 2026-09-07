@@ -94,24 +94,38 @@ class DeterministicAgentTest(unittest.TestCase):
         feedback = self._envelope(
             "action_feedback",
             {
+                "feedbackVersion": "action-feedback.v2",
+                "feedbackId": "feedback-1",
                 "decisionId": "decision-1",
+                "planId": None,
+                "stepId": None,
+                "planRevision": None,
                 "actionIndex": 0,
                 "actionType": "MoveAction",
                 "result": "BLOCKED",
+                "reasonCode": "OCCUPIED_OR_TERRAIN_BLOCKED",
+                "stepStatus": "UNTRACKED",
+                "planStatus": "UNTRACKED",
                 "beforePosition": {"x": 2, "y": 2},
                 "afterPosition": {"x": 2, "y": 2},
                 "selfHp": 20,
                 "decisionSource": "LOCAL_FALLBACK",
-                "overrideReason": "PLAN_BLOCKED",
+                "overrideReason": None,
             },
         )
         event = self._envelope(
             "world_event",
             {
-                "eventType": "PLAN_BLOCKED",
+                "eventVersion": "agent-event.v1",
+                "eventId": "event-1",
+                "eventType": "STEP_FAILED",
                 "logicalTick": 42,
                 "relatedPosition": {"x": 3, "y": 2},
                 "relatedEntityId": None,
+                "decisionId": "decision-1",
+                "planId": None,
+                "stepId": None,
+                "reasonCode": "REPEATED_BLOCKED",
             },
         )
 

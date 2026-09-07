@@ -33,7 +33,7 @@ public class AgentContractFixtureTest {
         return AgentProtocolCodec.decodeMessage(readFixture(name));
     }
 
-    // ---------- P25-PROTOCOL-01 合法 v2 fixture ----------
+    // ---------- 合法跨语言 fixture ----------
 
     @Test
     public void validDirectionalFixtureDecodesToTypedData() throws Exception {
@@ -49,7 +49,7 @@ public class AgentContractFixtureTest {
         assertEquals("guard-a", envelope.agentId);
         AgentProtocol.ObservationData data =
                 (AgentProtocol.ObservationData) envelope.data;
-        assertEquals("private-observation.v2",
+        assertEquals("private-observation.v3",
                 data.observationVersion());
         assertEquals("DIRECTIONAL", data.visionMode());
         assertEquals(14, data.self().hp());
@@ -90,7 +90,15 @@ public class AgentContractFixtureTest {
         assertTrue(data.intent().parameters().containsKey("futureHints"));
     }
 
-    // ---------- P25-PROTOCOL-02/03 非法 fixture 稳定拒绝 ----------
+    @Test
+    public void validExecutionFixturesDecode() throws Exception {
+        assertTrue(decode("valid-action-feedback-v2.json")
+                instanceof DecodeResult.Success);
+        assertTrue(decode("valid-world-event-v1.json")
+                instanceof DecodeResult.Success);
+    }
+
+    // ---------- 非法 fixture 稳定拒绝 ----------
 
     @Test
     public void oldEnvelopeVersionIsRejected() throws Exception {
@@ -132,6 +140,24 @@ public class AgentContractFixtureTest {
     public void appleTileTypeIsRejected() throws Exception {
         assertFailure("invalid-apple-tile-type.json",
                 FailureReason.UNKNOWN_FIELD);
+    }
+
+    @Test
+    public void oldFeedbackVersionIsRejected() throws Exception {
+        assertFailure("invalid-old-feedback-version.json",
+                FailureReason.UNKNOWN_PAYLOAD_VERSION);
+    }
+
+    @Test
+    public void missingEventIdIsRejected() throws Exception {
+        assertFailure("invalid-missing-event-id.json",
+                FailureReason.MISSING_REQUIRED);
+    }
+
+    @Test
+    public void unknownStepStatusIsRejected() throws Exception {
+        assertFailure("invalid-unknown-step-status.json",
+                FailureReason.SCHEMA_MISMATCH);
     }
 
     private void assertFailure(String name, FailureReason expected)

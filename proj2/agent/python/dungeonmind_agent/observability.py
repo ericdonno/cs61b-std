@@ -14,6 +14,8 @@ ALLOWED_FIELDS = frozenset({
     "graphNode", "modelCallIndex", "toolCallId", "toolName", "queueDepth",
     "activeModelCalls", "inputTokens", "outputTokens", "usageEstimated",
     "elapsedMs", "resultCode", "skillId", "planId", "stepId",
+    "feedbackId", "eventId", "planRevision", "stepStatus", "planStatus",
+    "replanTrigger", "consumedInputCount",
 })
 
 
@@ -32,7 +34,7 @@ class TraceSink:
         self._sequence = 0
 
     def record(self, event_type: str, **fields: Any) -> dict[str, Any]:
-        event = {"schemaVersion": "agent-model.trace.v1",
+        event = {"schemaVersion": "agent-model.trace.v2",
                  "eventType": event_type}
         event.update({key: value for key, value in fields.items()
                       if key in ALLOWED_FIELDS})

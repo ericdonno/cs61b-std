@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "agent-session.v1",
+  "messageId": "fixture-event-missing-id",
+  "messageSeq": 6,
+  "worldId": "world-fixture",
+  "runId": "run-fixture",
+  "floorId": 1,
+  "agentId": "guard-a",
+  "sessionEpoch": 1,
+  "logicalTick": 47,
+  "type": "world_event",
+  "data": {
+    "eventVersion": "agent-event.v1",
+    "eventType": "SOUND_HEARD",
+    "logicalTick": 47,
+    "relatedPosition": null,
+    "relatedEntityId": null,
+    "decisionId": null,
+    "planId": null,
+    "stepId": null,
+    "reasonCode": "NONE"
+  }
+}

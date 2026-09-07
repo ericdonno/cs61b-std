@@ -8,11 +8,14 @@ from typing import Any
 
 from .base import ResponseEmitter
 from ..graph.workflow import AgentWorkflow
+from ..graph.inbox import ExecutionInbox
+from ..config import RuntimeConfig
 
 
 class GraphAgentBrain:
     def __init__(self, workflow: AgentWorkflow, emitter: ResponseEmitter,
-                 executor: ThreadPoolExecutor) -> None:
+                 executor: ThreadPoolExecutor,
+                 config: RuntimeConfig | None = None) -> None:
         self._workflow = workflow
         self._emitter = emitter
         self._executor = executor
@@ -21,6 +24,11 @@ class GraphAgentBrain:
                                       dict[str, Any]]] = {}
         self._cancelled: set[str] = set()
         self._closed = False
+        limits = config or RuntimeConfig(brain="scripted")
+        self._inbox = ExecutionInbox(
+            limits.max_feedback_window, limits.max_event_window,
+            limits.max_consumed_ids,
+        )
 
     def on_message(self, envelope: dict[str, Any]) -> None:
         message_type = envelope["type"]
@@ -28,8 +36,8 @@ class GraphAgentBrain:
             self._start_decision(envelope)
         elif message_type == "cancel_request":
             self._cancel(envelope)
-        elif message_type == "action_feedback":
-            self._workflow.record_feedback(envelope)
+        elif message_type in {"action_feedback", "world_event"}:
+            self._inbox.stage(envelope)
 
     def _start_decision(self, request: dict[str, Any]) -> None:
         decision_id = request["data"]["decisionId"]
@@ -41,7 +49,9 @@ class GraphAgentBrain:
                 old_token.set()
                 old_future.cancel()
             self._active.clear()
-            future = self._executor.submit(self._workflow.decide, request, token)
+            inputs = self._inbox.snapshot(request["runId"])
+            future = self._executor.submit(
+                self._workflow.decide, request, token, inputs)
             self._active[decision_id] = (token, future, request)
         future.add_done_callback(
             lambda completed: self._complete(decision_id, completed)
@@ -55,19 +65,23 @@ class GraphAgentBrain:
         if not eligible or future.cancelled():
             return
         try:
-            intent = future.result()
+            decision = future.result()
         except Exception:
-            return
-        if intent is None:
             return
         request = active[2]
         observation = request["data"]
-        self._emitter.emit_response(request, "submit_intent", {
-            "decisionId": decision_id,
-            "observationSeq": observation["observationSeq"],
-            "requestGeneration": observation["requestGeneration"],
-            "intent": intent,
-        })
+        emitted = decision.intent is None
+        if decision.intent is not None:
+            result = self._emitter.emit_response(request, "submit_intent", {
+                "decisionId": decision_id,
+                "observationSeq": observation["observationSeq"],
+                "requestGeneration": observation["requestGeneration"],
+                "intent": decision.intent,
+            })
+            emitted = result.value == "EMITTED"
+        if emitted:
+            self._workflow.commit_consumption(request, decision)
+            self._inbox.commit_ids(decision.feedback_ids, decision.event_ids)
 
     def _cancel(self, request: dict[str, Any]) -> None:
         decision_id = request["data"]["decisionId"]

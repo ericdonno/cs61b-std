@@ -2,12 +2,12 @@
 
 > 状态：AgentSession 核心与 TCP transport 实现说明
 >
-> 更新时间：2026-08-02
+> 更新时间：2026-08-23
 >
 > 范围：`AgentSession` 的身份、请求生命周期、deadline、取消、有界邮箱、
 > `TransportEndpoint`、`AgentTransport`、TCP/NDJSON 与关闭语义
 >
-> 不展开：Python Agent runtime、`Enemy`/`Game` 生产接线、Tool Calling 和多 Agent 协作
+> 不展开：Python Agent 内部计划图、具体模型供应商和多 Agent 协作
 
 ---
 
@@ -215,7 +215,7 @@ Session 管理消息是否仍属于当前请求；Java 的校验器、仲裁器�
 | `requestPending` | 旧请求结束后是否应立即发新请求 | 当前 Session |
 | outbound queue | Java 想交给 transport 的信封 | 有界 Session 邮箱 |
 | inbound queue | transport 已解码、等待游戏线程处理的信封 | 有界 Session 邮箱 |
-| pending events | 按事件类型和实体合并的最新事件 | 最多配置容量 |
+| pending events | 按稳定事件 occurrence 合并的最新事件 | 最多配置容量 |
 | lifecycle events | 类型化的状态与失败诊断 | 最近 256 条 |
 | `closed` | 永久终止标记 | 一旦为 true 永不恢复 |
 
@@ -665,7 +665,7 @@ CLOSED
 flowchart TD
     MSG["新 outbound message"] --> SAME{"有可合并的同类消息?"}
     SAME -->|heartbeat| REPLACEH["替换旧 heartbeat<br/>COALESCED"]
-    SAME -->|同 eventType + relatedEntity| REPLACEE["替换旧 world_event<br/>COALESCED"]
+    SAME -->|同 eventId| REPLACEE["替换同一 occurrence 的 world_event<br/>COALESCED"]
     SAME -->|observation| REPLACEO["替换未发送 observation<br/>COALESCED"]
     SAME -->|否| SPACE{"queue 未满?"}
     SPACE -->|是| ACCEPT["ACCEPTED"]
@@ -682,7 +682,7 @@ flowchart TD
 |------|--------|--------------|
 | heartbeat | 全 Session 只保留一个 | 丢弃 |
 | observation | 当前未发送 observation | 关键拒绝并重建 |
-| world_event | `eventType + relatedEntityId` | 丢弃 outbound，但 pending map 保留最新事件 |
+| world_event | `eventId` | 丢弃 outbound，但 pending map 保留最新 occurrence |
 | action_feedback | 不合并 | 关键拒绝并重建 |
 | cancel_request | 不合并 | 关键拒绝并重建 |
 
@@ -690,7 +690,7 @@ flowchart TD
 
 pending events 使用单独的有界 `LinkedHashMap`：
 
-- 同 `eventType + relatedEntityId` 更新为最新事件。
+- 同 `eventId` 只代表同一次 occurrence；重复发送更新为同一条事件，不制造第二次触发。
 - 达到容量后，新 key 会淘汰最旧 key，并记录低优先级丢弃事件。
 - observation request 会保存当时的 event snapshot 到 `RequestContext.sentEvents`。
 - Handler 接受 intent 后，只清除仍等于已发送版本的事件；期间更新过的同 key 事件继续保留。
@@ -759,8 +759,8 @@ close 后：
 | 配置 | 默认值 | 当前是否被核心使用 |
 |------|--------|--------------------|
 | enabled | `false` | 是 |
-| host | `127.0.0.1` | 尚未被网络层使用 |
-| port | `9876` | 尚未被网络层使用 |
+| host | `127.0.0.1` | 是 |
+| port | `9876` | 是 |
 | soft deadline | `1500 ms` | 是 |
 | hard deadline | `10000 ms` | 是 |
 | cancel grace | `500 ms` | 是 |
@@ -768,11 +768,11 @@ close 后：
 | inbound capacity | `16` | 是 |
 | pending event capacity | `16` | 是 |
 | max inbound per poll | `8` | 是 |
-| max frame bytes | `65536` | 尚未被 frame reader 使用 |
-| reconnect initial | `250 ms` | 尚未被 worker 使用 |
-| reconnect max | `4000 ms` | 尚未被 worker 使用 |
-| shutdown join | `1000 ms` | 尚未被 worker 使用 |
-| heartbeat ticks | `120` | 尚未接入生产调度 |
+| max frame bytes | `65536` | 是 |
+| reconnect initial | `250 ms` | 是 |
+| reconnect max | `4000 ms` | 是 |
+| shutdown join | `1000 ms` | 是 |
+| heartbeat ticks | `120` | 是；只发 heartbeat，不创建模型请求 |
 | capabilities | `PATROL/CHASE/ATTACK/GUARD` + 属性 | observation 序列化时使用 |
 
 已实现的构造校验：
@@ -817,8 +817,8 @@ detail
 | transport | `TRANSPORT_CONTROL_FAILED` |
 | 生命周期 | `SESSION_CLOSED` |
 
-这是当前状态机的有界、类型化诊断窗口，还不是最终 `AgentTrace` canonical schema。
-后续 trace 接入应消费这些语义，不应把毫秒耗时或自由文本 detail 当作 canonical 正确性字段。
+这是状态机的有界、类型化诊断窗口。`Enemy` 会把相关语义投影到 `AgentTrace` canonical schema；
+毫秒耗时和自由文本 detail 仍不属于 canonical 正确性字段。
 
 ---
 

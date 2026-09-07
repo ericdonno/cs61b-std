@@ -285,7 +285,7 @@ public class SocketTransportTest {
             AgentProtocol.WorldEventData event =
                     new AgentProtocol.WorldEventData(
                             AgentProtocol.WorldEventType
-                                    .PLAN_BLOCKED.name(),
+                                    .STEP_FAILED.name(),
                             9, null, "x".repeat(2000));
             assertEquals(AgentSession.EnqueueResult.ACCEPTED,
                     session.sendWorldEvent(event, 9));

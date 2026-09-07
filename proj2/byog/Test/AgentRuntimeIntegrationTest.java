@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
+import java.util.concurrent.locks.LockSupport;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -144,6 +145,47 @@ public class AgentRuntimeIntegrationTest {
     }
 
     @Test
+    public void scriptedFeedbackAdvancesToNextPlanStep() throws Exception {
+        try (RuntimeProcess runtime = RuntimeProcess.start(
+                "normal", 0, 0.0, "scripted");
+             GameFixture fixture = new GameFixture(1)) {
+            AgentSession session = fixture.attachSession(
+                    fixture.enemies.get(0), runtime.port,
+                    1000, 5000);
+            awaitConnected(session);
+            fixture.prime(0);
+            await(() -> session.getInboundQueueSize() > 0,
+                    "scripted graph returned no first step");
+            fixture.tick(1);
+
+            long tick = 1;
+            ActionOutcome first = fixture.enemies.get(0).getLastActionOutcome();
+            while (first != null
+                    && first.getStepStatus() != AgentProtocol.StepStatus.SUCCEEDED
+                    && tick < 12) {
+                fixture.tick(++tick);
+                first = fixture.enemies.get(0).getLastActionOutcome();
+            }
+            assertNotNull(first);
+            assertEquals(AgentProtocol.StepStatus.SUCCEEDED,
+                    first.getStepStatus());
+            String planId = first.getPlanMetadata().planId();
+            String firstStepId = first.getPlanMetadata().stepId();
+
+            await(() -> session.getInboundQueueSize() > 0,
+                    "scripted graph did not advance the plan");
+            fixture.tick(++tick);
+            IntentLease next = fixture.enemies.get(0)
+                    .getArbiter().getCurrentLease();
+            assertEquals("GUARD", next.getIntent().getSkillId());
+            assertEquals(planId,
+                    next.getIntent().getPlanMetadata().planId());
+            assertNotEquals(firstStepId,
+                    next.getIntent().getPlanMetadata().stepId());
+        }
+    }
+
+    @Test
     public void twoEnemyConnectionsKeepIndependentIdentity() throws Exception {
         try (RuntimeProcess runtime = RuntimeProcess.start("normal", 0, 0.0);
              GameFixture fixture = new GameFixture(2)) {
@@ -196,9 +238,14 @@ public class AgentRuntimeIntegrationTest {
                     "delayed runtime request did not start");
 
             Position before = copy(fixture.enemies.get(0).getPosition());
-            Thread.sleep(75);
+            long[] nextTick = {1};
+            await(() -> {
+                fixture.tick(nextTick[0]++);
+                return session.getRequestState()
+                        == AgentSession.RequestState.SOFT_TIMED_OUT;
+            }, "delayed runtime did not cross the soft deadline");
             long started = System.nanoTime();
-            for (long tick = 1; tick <= 8; tick++) {
+            for (long tick = nextTick[0]; tick < nextTick[0] + 8; tick++) {
                 fixture.tick(tick);
             }
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(
@@ -359,7 +406,7 @@ public class AgentRuntimeIntegrationTest {
             assertTrue(session.isClosed());
             long openedBeforeWait = countLifecycleEvents(
                     session, AgentSession.LifecycleEventType.CONNECTION_OPENED);
-            Thread.sleep(250);
+            LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(250));
             assertEquals(connectedEpoch, session.getSessionEpoch());
             assertEquals(openedBeforeWait, countLifecycleEvents(
                     session, AgentSession.LifecycleEventType.CONNECTION_OPENED));
@@ -411,7 +458,7 @@ public class AgentRuntimeIntegrationTest {
                     && session.getSessionEpoch() > previousEpoch) {
                 return;
             }
-            Thread.sleep(10);
+            LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(10));
         }
         StringBuilder history = new StringBuilder();
         for (AgentSession.LifecycleEvent event : session.getLifecycleEvents()) {
@@ -436,7 +483,7 @@ public class AgentRuntimeIntegrationTest {
             if (condition.getAsBoolean()) {
                 return;
             }
-            Thread.sleep(10);
+            LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(10));
         }
         assertTrue(message, condition.getAsBoolean());
     }

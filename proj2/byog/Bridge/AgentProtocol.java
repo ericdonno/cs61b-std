@@ -15,9 +15,11 @@ public final class AgentProtocol {
     /** 通用信封版本 */
     public static final String ENVELOPE_VERSION = "agent-session.v1";
     /** observation payload 版本 */
-    public static final String OBSERVATION_VERSION = "private-observation.v2";
+    public static final String OBSERVATION_VERSION = "private-observation.v3";
     /** intent payload 版本 */
     public static final String INTENT_VERSION = "strategic-intent.v2";
+    public static final String FEEDBACK_VERSION = "action-feedback.v2";
+    public static final String EVENT_VERSION = "agent-event.v1";
 
     private AgentProtocol() {
     }
@@ -48,13 +50,52 @@ public final class AgentProtocol {
         LOCAL_FALLBACK
     }
 
-    /** WorldEvent 白名单，只有这 5 种可以通过 eventType 校验 */
+    /** WorldEvent 白名单。 */
     public enum WorldEventType {
-        PLAN_BLOCKED,
-        PLAN_EXHAUSTED,
         PLAYER_SPOTTED,
+        SOUND_HEARD,
+        MESSAGE_RECEIVED,
+        STEP_SUCCEEDED,
+        STEP_FAILED,
+        PLAN_COMPLETED,
+        PLAN_CANCELLED,
         REFLEX_OVERRIDE_STARTED,
         REFLEX_OVERRIDE_ENDED
+    }
+
+    public enum StepStatus {
+        UNTRACKED,
+        ACTIVE,
+        SUCCEEDED,
+        FAILED,
+        PAUSED,
+        CANCELLED
+    }
+
+    public enum PlanStatus {
+        UNTRACKED,
+        ACTIVE,
+        PAUSED,
+        COMPLETED,
+        REPLAN_REQUIRED,
+        CANCELLED
+    }
+
+    public enum OutcomeReason {
+        NONE,
+        ACTION_COMMITTED,
+        DAMAGE_COMMITTED,
+        OCCUPIED_OR_TERRAIN_BLOCKED,
+        LOCAL_REROUTE,
+        REPEATED_BLOCKED,
+        TARGET_LOST,
+        PRECONDITION_CHANGED,
+        COMMITMENT_COMPLETED,
+        REFLEX_OVERRIDE_STARTED,
+        REFLEX_OVERRIDE_ENDED,
+        LEASE_INVALIDATED,
+        PLAN_COMPLETED,
+        CANCELLED
     }
 
     /** 完整身份元组，后续 AgentSession 用这些字段校验响应是否有效 */
@@ -69,10 +110,17 @@ public final class AgentProtocol {
         public Identity(String worldId, String runId, int floorId,
                         String agentId, long sessionEpoch,
                         long requestGeneration) {
-            this.worldId = worldId;
-            this.runId = runId;
+            this.worldId = requireNonBlank(worldId, "worldId");
+            this.runId = requireNonBlank(runId, "runId");
+            if (floorId < 1) {
+                throw new IllegalArgumentException("floorId must be >= 1");
+            }
             this.floorId = floorId;
-            this.agentId = agentId;
+            this.agentId = requireNonBlank(agentId, "agentId");
+            if (sessionEpoch < 0 || requestGeneration < 0) {
+                throw new IllegalArgumentException(
+                        "session counters must be non-negative");
+            }
             this.sessionEpoch = sessionEpoch;
             this.requestGeneration = requestGeneration;
         }
@@ -238,10 +286,18 @@ public final class AgentProtocol {
 
     /** action_feedback 消息 data */
     public record ActionFeedbackData(
+            String feedbackVersion,
+            String feedbackId,
             String decisionId,
+            String planId,
+            String stepId,
+            Integer planRevision,
             int actionIndex,
             String actionType,
             String result,
+            String reasonCode,
+            String stepStatus,
+            String planStatus,
             PositionData beforePosition,
             PositionData afterPosition,
             int selfHp,
@@ -249,12 +305,61 @@ public final class AgentProtocol {
             String overrideReason
     ) implements MessageData {
         public ActionFeedbackData {
-            Objects.requireNonNull(decisionId, "decisionId");
+            requireNonBlank(feedbackVersion, "feedbackVersion");
+            requireNonBlank(feedbackId, "feedbackId");
+            requireNonBlank(decisionId, "decisionId");
             Objects.requireNonNull(actionType, "actionType");
             Objects.requireNonNull(result, "result");
+            Objects.requireNonNull(reasonCode, "reasonCode");
+            Objects.requireNonNull(stepStatus, "stepStatus");
+            Objects.requireNonNull(planStatus, "planStatus");
+            OutcomeReason.valueOf(reasonCode);
+            StepStatus.valueOf(stepStatus);
+            PlanStatus.valueOf(planStatus);
             Objects.requireNonNull(beforePosition, "beforePosition");
             Objects.requireNonNull(afterPosition, "afterPosition");
             Objects.requireNonNull(decisionSource, "decisionSource");
+            boolean hasPlan = planId != null || stepId != null
+                    || planRevision != null;
+            if (hasPlan && (planId == null || stepId == null
+                    || planRevision == null || planRevision < 0)) {
+                throw new IllegalArgumentException(
+                        "plan metadata must be entirely present or null");
+            }
+            if (decisionSource == DecisionSource.REMOTE_AGENT && !hasPlan) {
+                throw new IllegalArgumentException(
+                        "remote feedback requires plan metadata");
+            }
+            if (decisionSource == DecisionSource.LOCAL_FALLBACK && hasPlan) {
+                throw new IllegalArgumentException(
+                        "local feedback cannot carry plan metadata");
+            }
+        }
+
+        public ActionFeedbackData(
+                String decisionId, int actionIndex, String actionType,
+                String result, PositionData beforePosition,
+                PositionData afterPosition, int selfHp,
+                DecisionSource decisionSource, String overrideReason) {
+            this(FEEDBACK_VERSION,
+                    "feedback-" + decisionId + "-" + actionIndex,
+                    decisionId,
+                    decisionSource == DecisionSource.REMOTE_AGENT
+                            ? decisionId + ":plan" : null,
+                    decisionSource == DecisionSource.REMOTE_AGENT
+                            ? "step-0" : null,
+                    decisionSource == DecisionSource.REMOTE_AGENT
+                            ? 0 : null,
+                    actionIndex,
+                    actionType, result, OutcomeReason.ACTION_COMMITTED.name(),
+                    decisionSource == DecisionSource.REMOTE_AGENT
+                            ? StepStatus.ACTIVE.name()
+                            : StepStatus.UNTRACKED.name(),
+                    decisionSource == DecisionSource.REMOTE_AGENT
+                            ? PlanStatus.ACTIVE.name()
+                            : PlanStatus.UNTRACKED.name(),
+                    beforePosition, afterPosition, selfHp,
+                    decisionSource, overrideReason);
         }
     }
 
@@ -282,12 +387,20 @@ public final class AgentProtocol {
 
     /** world_event 消息 data */
     public record WorldEventData(
+            String eventVersion,
+            String eventId,
             String eventType,
             long logicalTick,
             PositionData relatedPosition,
-            String relatedEntityId
+            String relatedEntityId,
+            String decisionId,
+            String planId,
+            String stepId,
+            String reasonCode
     ) implements MessageData {
         public WorldEventData {
+            requireNonBlank(eventVersion, "eventVersion");
+            requireNonBlank(eventId, "eventId");
             Objects.requireNonNull(eventType, "eventType");
             try {
                 WorldEventType.valueOf(eventType);
@@ -295,6 +408,18 @@ public final class AgentProtocol {
                 throw new IllegalArgumentException(
                         "unknown world event type: " + eventType, e);
             }
+            if (reasonCode != null) {
+                OutcomeReason.valueOf(reasonCode);
+            }
+        }
+
+        public WorldEventData(
+                String eventType, long logicalTick,
+                PositionData relatedPosition, String relatedEntityId) {
+            this(EVENT_VERSION,
+                    "event-" + logicalTick + "-" + eventType,
+                    eventType, logicalTick, relatedPosition,
+                    relatedEntityId, null, null, null, null);
         }
     }
 
@@ -414,5 +539,13 @@ public final class AgentProtocol {
         }
         throw new IllegalArgumentException(
                 "unsupported JSON parameter type: " + value.getClass());
+    }
+
+    private static String requireNonBlank(String value, String name) {
+        Objects.requireNonNull(value, name);
+        if (value.trim().isEmpty()) {
+            throw new IllegalArgumentException(name + " must not be blank");
+        }
+        return value;
     }
 }
